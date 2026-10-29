@@ -1,0 +1,33 @@
+# streams-tools
+
+Herramientas para streaming. Pensado para ser sencillo y simple de usar.
+
+## Empezar
+
+```sh
+git clone --recurse-submodules <url>
+cd streams-tools
+./scripts/setup.sh
+```
+
+`setup.sh` activa los hooks de `.githooks/`, la plantilla de commit y la configuración de submódulos.
+Solo requiere `git` y un shell POSIX.
+
+## Comandos básicos
+
+| Tarea | Comando |
+|---|---|
+| Actualizar todo (incluye submódulos) | `git pull` |
+| Nueva rama | `git switch -c feat/descripcion` |
+| Commit parcial y atómico | `git add -p && git commit` |
+| Subir rama y abrir PR | `git push -u origin HEAD && gh pr create --fill` |
+| Sincronizar submódulos | `git submodule update --init --recursive` |
+| Actualizar un submódulo | `git submodule update --remote <ruta>` |
+
+## Reglas
+
+- **Conventional Commits** (`feat:`, `fix:`, `docs:`...).
+- **Commits atómicos**: un cambio lógico por commit.
+- **PRs pequeñas**: objetivo ≤ 400 líneas cambiadas. Es la regla más importante.
+
+Detalles en [CONTRIBUTING.md](CONTRIBUTING.md) y [docs/submodules.md](docs/submodules.md).
