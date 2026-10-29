@@ -1,0 +1,9 @@
+
+# <tipo>(<scope opcional>): <descripción en imperativo, ≤ 72 caracteres>
+#
+# [cuerpo opcional: el porqué del cambio, no el cómo]
+#
+# [footer opcional: BREAKING CHANGE: ..., Refs: #123]
+#
+# Tipos: feat fix docs style refactor perf test build ci chore revert
+# Un commit = un cambio lógico. Si necesitas "y" en el subject, divídelo.
