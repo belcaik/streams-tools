@@ -1,0 +1,21 @@
+# Sistema operativo y editores
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+
+# Entornos y secretos locales
+.env
+.env.*
+!.env.example
+
+# Artefactos de build y logs
+dist/
+build/
+*.log
+
+# Orquestación de agentes (herramienta de desarrollo, nunca se versiona)
+orchestration/
+worktrees/

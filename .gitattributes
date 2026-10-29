@@ -1,0 +1,13 @@
+# Normaliza finales de línea a LF en el repositorio
+* text=auto eol=lf
+
+# Scripts siempre con LF
+*.sh text eol=lf
+.githooks/* text eol=lf
+
+# Binarios
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.zip binary
