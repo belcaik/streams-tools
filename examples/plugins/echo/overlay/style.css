@@ -1,0 +1,43 @@
+.st-echo {
+  --st-echo-background: #10141c;
+  --st-echo-color: #f4f7ff;
+  --st-echo-accent: #78a6ff;
+  --st-echo-font: system-ui, sans-serif;
+  --st-echo-title-size: 2rem;
+  --st-echo-message-size: 4rem;
+  --st-echo-radius: 0.75rem;
+  --st-echo-animation-duration: 350ms;
+  margin: 0;
+  background: var(--st-echo-background);
+  color: var(--st-echo-color);
+  font-family: var(--st-echo-font);
+}
+
+.st-echo__container {
+  display: grid;
+  min-height: 100vh;
+  place-content: center;
+  text-align: center;
+}
+
+.st-echo__title {
+  color: var(--st-echo-accent);
+  font-size: var(--st-echo-title-size);
+}
+
+.st-echo__message {
+  padding: 1rem 2rem;
+  border-radius: var(--st-echo-radius);
+  background: var(--st-echo-accent);
+  font-size: var(--st-echo-message-size);
+  font-weight: 700;
+}
+
+.st-echo__message--visible {
+  animation: st-echo-pop var(--st-echo-animation-duration) ease-out;
+}
+
+@keyframes st-echo-pop {
+  from { transform: scale(0.7); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
