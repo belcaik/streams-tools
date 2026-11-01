@@ -62,7 +62,16 @@ pub struct FollowData {}
 #[serde(deny_unknown_fields)]
 pub struct SubData {
     pub tier: String,
+    #[serde(deserialize_with = "deserialize_months")]
     pub months: u64,
+}
+
+fn deserialize_months<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    u64::deserialize(deserializer)
+        .map_err(|error| D::Error::custom(format!("invalid field `months`: {error}")))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,5 +215,87 @@ impl<'de> Deserialize<'de> for EventData {
             "" => Err(D::Error::custom("event type cannot be empty")),
             _ => Ok(Self::Plugin(PluginData { name: kind, data })),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FOLLOW: &str = r#"{"id":"follow-1","platform":"twitch","type":"follow","user":{"id":"1","name":"ana","roles":["mod"]},"data":{},"ts":"2026-10-31T20:00:00Z"}"#;
+    const SUB: &str = r#"{"id":"sub-1","platform":"twitch","type":"sub","user":{"id":"2","name":"bea","roles":["subscriber"]},"data":{"tier":"1000","months":3},"ts":"2026-10-31T20:01:00Z"}"#;
+    const GIFT_SUB: &str = r#"{"id":"gift-1","platform":"kick","type":"gift_sub","user":{"id":"3","name":"carla","roles":[]},"data":{"tier":"gold","count":5},"ts":"2026-10-31T20:02:00Z"}"#;
+    const RAID: &str = r#"{"id":"raid-1","platform":"twitch","type":"raid","user":{"id":"4","name":"diego","roles":["broadcaster"]},"data":{"viewers":42},"ts":"2026-10-31T20:03:00Z"}"#;
+    const DONATION: &str = r#"{"id":"donation-1","platform":"youtube","type":"donation","user":{"id":"5","name":"eva","roles":[]},"data":{"amount":12.5,"currency":"USD","message":"gran stream"},"ts":"2026-10-31T20:04:00Z"}"#;
+    const REDEMPTION: &str = r#"{"id":"redemption-1","platform":"twitch","type":"redemption","user":{"id":"6","name":"fede","roles":[]},"data":{"reward_id":"reward-7","reward_title":"Di mi nombre","cost":500,"input":"hola"},"ts":"2026-10-31T20:05:00Z"}"#;
+    const CHAT: &str = r#"{"id":"chat-1","platform":"kick","type":"chat","user":{"id":"7","name":"gabi","roles":["mod","subscriber"]},"data":{"message":"buenas"},"ts":"2026-10-31T20:06:00Z"}"#;
+    const PLUGIN: &str = r#"{"id":"plugin-1","platform":"plugin:spotify","type":"now_playing","user":{"id":"plugin","name":"spotify","roles":[]},"data":{"artist":"Ana","track":"Luz","position":17},"ts":"2026-10-31T20:07:00Z"}"#;
+
+    fn assert_roundtrip(fixture: &str) -> Event {
+        let event: Event = serde_json::from_str(fixture).expect("fixture should deserialize");
+        let actual = serde_json::to_value(&event).expect("event should serialize");
+        let expected: Value = serde_json::from_str(fixture).expect("fixture should be valid JSON");
+        assert_eq!(actual, expected);
+        event
+    }
+
+    #[test]
+    fn roundtrips_every_core_event_fixture() {
+        let follow = assert_roundtrip(FOLLOW);
+        assert!(matches!(follow.event, EventData::Follow(_)));
+        let sub = assert_roundtrip(SUB);
+        assert!(matches!(sub.event, EventData::Sub(_)));
+        let gift_sub = assert_roundtrip(GIFT_SUB);
+        assert!(matches!(gift_sub.event, EventData::GiftSub(_)));
+        let raid = assert_roundtrip(RAID);
+        assert!(matches!(raid.event, EventData::Raid(_)));
+        let donation = assert_roundtrip(DONATION);
+        assert!(matches!(donation.event, EventData::Donation(_)));
+        let redemption = assert_roundtrip(REDEMPTION);
+        assert!(matches!(redemption.event, EventData::Redemption(_)));
+        let chat = assert_roundtrip(CHAT);
+        assert!(matches!(chat.event, EventData::Chat(_)));
+    }
+
+    #[test]
+    fn roundtrips_plugin_event_and_platform() {
+        let event = assert_roundtrip(PLUGIN);
+        assert_eq!(event.platform, Platform::Plugin("spotify".into()));
+        assert_eq!(
+            event.event,
+            EventData::Plugin(PluginData {
+                name: "now_playing".into(),
+                data: serde_json::from_str(r#"{"artist":"Ana","track":"Luz","position":17}"#,)
+                    .expect("plugin data should be valid JSON"),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_core_payload_with_clear_error() {
+        let fixture = r#"{"id":"sub-1","platform":"twitch","type":"sub","user":{"id":"2","name":"bea","roles":[]},"data":{"tier":"1000","months":"three"},"ts":"2026-10-31T20:01:00Z"}"#;
+        let error = serde_json::from_str::<Event>(fixture)
+            .expect_err("invalid core payload should be rejected")
+            .to_string();
+        assert!(error.contains("invalid data for event type `sub`"));
+        assert!(error.contains("months"));
+    }
+
+    #[test]
+    fn rejects_invalid_platform_with_clear_error() {
+        let fixture = r#"{"id":"follow-1","platform":"discord","type":"follow","user":{"id":"1","name":"ana","roles":[]},"data":{},"ts":"2026-10-31T20:00:00Z"}"#;
+        let error = serde_json::from_str::<Event>(fixture)
+            .expect_err("unknown platform should be rejected")
+            .to_string();
+        assert!(error.contains("invalid platform `discord`"));
+    }
+
+    #[test]
+    fn rejects_empty_plugin_platform_name() {
+        let fixture = r#"{"id":"follow-1","platform":"plugin:","type":"follow","user":{"id":"1","name":"ana","roles":[]},"data":{},"ts":"2026-10-31T20:00:00Z"}"#;
+        let error = serde_json::from_str::<Event>(fixture)
+            .expect_err("empty plugin platform should be rejected")
+            .to_string();
+        assert!(error.contains("invalid platform `plugin:`"));
     }
 }
