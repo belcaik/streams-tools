@@ -9,5 +9,6 @@ path = "src/main.rs"
 
 [dependencies]
 streams-tools-core = { path = "../core" }
+streams-tools-plugins = { path = "../plugins" }
 streams-tools-server = { path = "../server" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
