@@ -21,7 +21,7 @@ async fn main() -> io::Result<()> {
     let bus = Bus::new(1024).expect("server bus capacity must be non-zero");
 
     println!("streams-tools listening on http://{addr}");
-    streams_tools_server::serve(bus, addr, async {
+    streams_tools_server::serve(bus, addr, Vec::new(), async {
         if let Err(error) = tokio::signal::ctrl_c().await {
             eprintln!("failed to listen for Ctrl+C: {error}");
         }

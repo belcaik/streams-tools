@@ -1,4 +1,4 @@
-use std::{collections::HashSet, future::Future, net::SocketAddr};
+use std::{collections::HashSet, future::Future, net::SocketAddr, path::PathBuf};
 
 use axum::{
     Json, Router,
@@ -13,30 +13,67 @@ use axum::{
 };
 use serde::Deserialize;
 use streams_tools_core::{Bus, Event, EventData, ReceiveError, Subscriber};
+use tower_http::services::ServeDir;
 
 #[derive(Debug, Deserialize)]
 struct WsQuery {
     types: Option<String>,
 }
 
-pub fn router(bus: Bus) -> Router {
-    Router::new()
+#[derive(Debug, Clone)]
+pub struct PluginOverlay {
+    pub name: String,
+    pub root: PathBuf,
+    pub config: serde_json::Value,
+    pub custom_css: PathBuf,
+}
+
+pub fn router(bus: Bus, overlays: Vec<PluginOverlay>) -> Router {
+    let mut router = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/ws", get(websocket))
         .route("/api/events", post(publish))
         .route("/streams.js", get(streams_js))
-        .with_state(bus)
+        .with_state(bus);
+    for overlay in overlays {
+        let config = overlay.config;
+        let custom_css_path = overlay.custom_css;
+        let overlay_router = Router::new()
+            .route(
+                "/config.json",
+                get(move || {
+                    let config = config.clone();
+                    async move { Json(config) }
+                }),
+            )
+            .route(
+                "/custom.css",
+                get(move || {
+                    let path = custom_css_path.clone();
+                    async move { custom_css(path).await }
+                }),
+            )
+            .fallback_service(ServeDir::new(overlay.root).append_index_html_on_directories(true));
+        router = router.nest(&format!("/p/{}/", overlay.name), overlay_router);
+    }
+    router
 }
 
 pub async fn serve(
     bus: Bus,
     addr: SocketAddr,
+    overlays: Vec<PluginOverlay>,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, router(bus))
+    axum::serve(listener, router(bus, overlays))
         .with_graceful_shutdown(shutdown)
         .await
+}
+
+async fn custom_css(path: PathBuf) -> Response {
+    let body = tokio::fs::read(path).await.unwrap_or_default();
+    ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], body).into_response()
 }
 
 async fn streams_js() -> impl IntoResponse {
