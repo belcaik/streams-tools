@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   policy:
@@ -33,11 +34,15 @@ jobs:
       - name: Check PR size
         shell: bash
         env:
-          ADDITIONS: ${{ github.event.pull_request.additions }}
-          DELETIONS: ${{ github.event.pull_request.deletions }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          changed_lines=$((ADDITIONS + DELETIONS))
-          echo "Líneas cambiadas: $changed_lines"
+          # Los lockfiles no cuentan para el límite (CONTRIBUTING.md).
+          changed_lines=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+            --jq '.[] | select(.filename | test("(^|/)(Cargo|package-lock|pnpm-lock|yarn)\\.(lock|json|yaml)$") | not) | .additions + .deletions' |
+            awk '{ total += $1 } END { print total + 0 }')
+          echo "Líneas cambiadas (sin lockfiles): $changed_lines"
           if (( changed_lines > 800 )); then
             echo "::error::La PR supera el máximo de 800 líneas; divídela"
             exit 1
