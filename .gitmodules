@@ -1,0 +1,4 @@
+[submodule "plugins/now-playing"]
+	path = plugins/now-playing
+	url = https://github.com/belcaik/streams-plugin-now-playing
+	branch = main
