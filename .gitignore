@@ -20,3 +20,6 @@ build/
 # Orquestación de agentes (herramienta de desarrollo, nunca se versiona)
 orchestration/
 worktrees/
+
+# Binarios compilados de plugins de ejemplo
+examples/plugins/*/bin/

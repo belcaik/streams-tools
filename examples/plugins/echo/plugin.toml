@@ -1,0 +1,13 @@
+name = "echo"
+version = "0.1.0"
+description = "Responde pong a cada mensaje !ping"
+
+[permissions]
+listens = ["chat"]
+emits = ["pong"]
+
+[worker]
+command = ["bin/echo-worker"]
+
+[config]
+title = "Echo plugin"
