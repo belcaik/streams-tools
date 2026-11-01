@@ -72,3 +72,61 @@ impl Subscriber {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ChatData, EventData, Platform, User};
+
+    fn event(id: &str) -> Event {
+        Event {
+            id: id.into(),
+            platform: Platform::Twitch,
+            event: EventData::Chat(ChatData {
+                message: String::new(),
+            }),
+            user: User {
+                id: String::new(),
+                name: String::new(),
+                roles: Vec::new(),
+            },
+            ts: String::new(),
+        }
+    }
+
+    #[test]
+    fn rejects_zero_capacity() {
+        assert!(matches!(Bus::new(0), Err(InvalidCapacity)));
+    }
+
+    #[tokio::test]
+    async fn publishes_to_multiple_subscribers() {
+        let bus = Bus::new(4).expect("capacity should be valid");
+        let mut first = bus.subscribe();
+        let mut second = bus.subscribe();
+        let event = event("1");
+
+        assert_eq!(bus.publish(event.clone()).expect("subscribers exist"), 2);
+        assert_eq!(first.recv().await.expect("event should arrive"), event);
+        assert_eq!(second.recv().await.expect("event should arrive"), event);
+    }
+
+    #[tokio::test]
+    async fn reports_lag_and_continues() {
+        let bus = Bus::new(2).expect("capacity should be valid");
+        let mut subscriber = bus.subscribe();
+        for id in ["1", "2", "3"] {
+            bus.publish(event(id)).expect("subscriber exists");
+        }
+
+        assert_eq!(subscriber.recv().await, Err(ReceiveError::Lagged(1)));
+        assert_eq!(
+            subscriber.recv().await.expect("event should arrive"),
+            event("2")
+        );
+        assert_eq!(
+            subscriber.recv().await.expect("event should arrive"),
+            event("3")
+        );
+    }
+}
