@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Echo plugin</title>
+    <link rel="stylesheet" href="./style.css">
+    <link rel="stylesheet" href="./custom.css">
+    <script src="/streams.js"></script>
+  </head>
+  <body class="st-echo">
+    <main class="st-echo__container">
+      <h1 class="st-echo__title">Echo plugin</h1>
+      <p class="st-echo__message" aria-live="polite" hidden></p>
+    </main>
+    <script>
+      const title = document.querySelector(".st-echo__title");
+      const message = document.querySelector(".st-echo__message");
+      let hideTimer;
+
+      fetch("./config.json")
+        .then((response) => {
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          return response.json();
+        })
+        .then((config) => { title.textContent = config.title || "Echo plugin"; })
+        .catch((error) => console.error("Echo config could not be loaded:", error));
+
+      streams.on("pong", (event) => {
+        message.textContent = event.data.text;
+        message.hidden = false;
+        message.classList.remove("st-echo__message--visible");
+        void message.offsetWidth;
+        message.classList.add("st-echo__message--visible");
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => { message.hidden = true; }, 3000);
+      });
+    </script>
+  </body>
+</html>
