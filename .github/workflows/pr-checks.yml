@@ -1,0 +1,47 @@
+name: PR checks
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title
+        shell: bash
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9][a-z0-9._/-]*\))?(!)?: (.+)$'
+          if [[ ! "$PR_TITLE" =~ $pattern ]]; then
+            echo "::error::El título debe seguir Conventional Commits"
+            exit 1
+          fi
+
+          description="${BASH_REMATCH[4]}"
+          if [[ ! "$description" =~ ^[a-záéíóúüñ] ]] ||
+             [[ "$description" == *. ]] ||
+             (( ${#description} > 72 )); then
+            echo "::error::La descripción debe iniciar en minúscula, no terminar en punto y tener como máximo 72 caracteres"
+            exit 1
+          fi
+
+      - name: Check PR size
+        shell: bash
+        env:
+          ADDITIONS: ${{ github.event.pull_request.additions }}
+          DELETIONS: ${{ github.event.pull_request.deletions }}
+        run: |
+          changed_lines=$((ADDITIONS + DELETIONS))
+          echo "Líneas cambiadas: $changed_lines"
+          if (( changed_lines > 800 )); then
+            echo "::error::La PR supera el máximo de 800 líneas; divídela"
+            exit 1
+          fi
+          if (( changed_lines > 400 )); then
+            echo "::warning::La PR supera el objetivo de 400 líneas; justifícala"
+          fi
