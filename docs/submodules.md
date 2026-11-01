@@ -50,7 +50,8 @@ git commit -m "chore(submodules): actualiza <nombre> a <versión o sha>"
 2. Pushea el submódulo **primero** y abre su PR.
 3. Cuando esté mergeada, actualiza el puntero en este repo en un commit `chore` aparte.
 
-Los hooks bloquean un push si el puntero apunta a un commit que no existe en el remoto.
+Publica primero el commit del submódulo; el puntero de este repositorio debe apuntar
+a un commit disponible en su remoto.
 
 ## Quitar un submódulo
 

@@ -3,7 +3,6 @@
 
 # Scripts siempre con LF
 *.sh text eol=lf
-.githooks/* text eol=lf
 
 # Binarios
 *.png binary
