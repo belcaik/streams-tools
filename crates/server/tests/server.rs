@@ -196,3 +196,13 @@ async fn websocket_filter_discards_unrequested_types() {
     );
     assert_eq!(next_event(&mut socket).await, chat);
 }
+
+#[tokio::test]
+async fn streams_js_has_javascript_content_type() {
+    let server = start(Bus::new(8).expect("capacity should be valid")).await;
+    let response = request(server.addr, "GET", "/streams.js", "").await;
+
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(response.contains("\r\ncontent-type: text/javascript\r\n"));
+    assert!(response_body(&response).contains("window.streams = { on, emit };"));
+}

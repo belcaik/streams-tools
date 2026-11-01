@@ -7,7 +7,7 @@ use axum::{
         rejection::JsonRejection,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::StatusCode,
+    http::{StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -24,6 +24,7 @@ pub fn router(bus: Bus) -> Router {
         .route("/health", get(|| async { "ok" }))
         .route("/ws", get(websocket))
         .route("/api/events", post(publish))
+        .route("/streams.js", get(streams_js))
         .with_state(bus)
 }
 
@@ -36,6 +37,13 @@ pub async fn serve(
     axum::serve(listener, router(bus))
         .with_graceful_shutdown(shutdown)
         .await
+}
+
+async fn streams_js() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/javascript")],
+        include_str!("../assets/streams.js"),
+    )
 }
 
 async fn publish(State(bus): State<Bus>, payload: Result<Json<Event>, JsonRejection>) -> Response {
