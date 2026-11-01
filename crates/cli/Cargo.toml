@@ -1,0 +1,8 @@
+[package]
+name = "streams-tools-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "streams-tools"
+path = "src/main.rs"

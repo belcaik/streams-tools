@@ -1,6 +1,6 @@
 # Guía de contribución
 
-Tres reglas no negociables. Los hooks de `.githooks/` las vigilan por ti.
+Tres reglas no negociables. CI valida las que pueden automatizarse.
 
 ## 1. Conventional Commits
 

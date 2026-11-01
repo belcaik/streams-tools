@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install Rust target
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --locked --release --package streams-tools-cli --target ${{ matrix.target }}
+
+      - name: Package Unix binary
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          archive="streams-tools-${TAG}-${TARGET}"
+          mkdir "$archive"
+          cp "target/${TARGET}/release/streams-tools" "$archive/"
+          tar -czf "${archive}.tar.gz" "$archive"
+
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          $archive = "streams-tools-$env:TAG-$env:TARGET"
+          New-Item -ItemType Directory -Path $archive
+          Copy-Item "target/$env:TARGET/release/streams-tools.exe" "$archive/"
+          Compress-Archive -Path $archive -DestinationPath "$archive.zip"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: streams-tools-${{ github.ref_name }}-${{ matrix.target }}.*
+          fail_on_unmatched_files: true

@@ -10,7 +10,7 @@ cd streams-tools
 ./scripts/setup.sh
 ```
 
-`setup.sh` activa los hooks de `.githooks/`, la plantilla de commit y la configuración de submódulos.
+`setup.sh` configura la plantilla de commit y el manejo de submódulos.
 Solo requiere `git` y un shell POSIX.
 
 ## Comandos básicos
