@@ -38,6 +38,12 @@ fn main() {
             if mode == "restart" {
                 std::process::exit(1);
             }
+            if mode == "burst" {
+                for seq in 0..50 {
+                    emit(&json!({ "seq": seq }));
+                }
+                std::process::exit(1);
+            }
         }
     }
 }

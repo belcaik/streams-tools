@@ -185,6 +185,24 @@ async fn crashed_after_output_restarts_and_emits_again() {
 }
 
 #[tokio::test]
+async fn output_written_right_before_exit_is_not_lost() {
+    let temp = TempDir::new();
+    let plugin = temp.plugin("burst", &[]);
+    let name = plugin.manifest.name.clone();
+    let bus = Bus::new(256).expect("capacity should be valid");
+    let mut subscriber = bus.subscribe();
+    let supervisor = Supervisor::start(bus, vec![plugin], temp.options(5));
+    // La primera línea es el eco de init; después deben llegar las 50 en orden
+    // antes de que un reinicio vuelva a empezar desde cero.
+    next_plugin(&mut subscriber, &name).await;
+    for seq in 0..50 {
+        let event = next_plugin(&mut subscriber, &name).await;
+        assert_eq!(observed_input(&event)["seq"], seq);
+    }
+    shutdown(supervisor).await;
+}
+
+#[tokio::test]
 async fn repeated_crashes_disable_only_after_exceeding_limit() {
     let temp = TempDir::new();
     let plugin = temp.plugin("crash", &[]);

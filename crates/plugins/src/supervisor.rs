@@ -18,6 +18,8 @@ use tokio::{
 
 use crate::{Plugin, PluginOs, protocol};
 
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
+
 #[derive(Debug, Clone)]
 pub struct SupervisorOptions {
     pub initial_backoff: Duration,
@@ -226,16 +228,14 @@ async fn run_child(
                 if changed.is_err() || *task.shutdown.borrow() { return RunOutcome::Shutdown; }
             }
             status = child.wait() => {
+                drain_output(task, stdout, stderr, stdout_open, stderr_open).await;
                 return RunOutcome::Failure(match status {
                     Ok(status) => format!("worker exited with {status}"),
                     Err(error) => format!("cannot wait for worker: {error}"),
                 });
             }
             line = stdout.next_line(), if stdout_open => match line {
-                Ok(Some(line)) => match protocol::parse_output(&line, name, &task.plugin.manifest.permissions, &task.counter) {
-                    Ok(event) => { let _ = task.bus.publish(event); }
-                    Err(error) => eprintln!("[plugin:{name}] {error}"),
-                },
+                Ok(Some(line)) => publish_line(task, &line),
                 Ok(None) => stdout_open = false,
                 Err(error) => return RunOutcome::Failure(format!("cannot read stdout: {error}")),
             },
@@ -256,6 +256,44 @@ async fn run_child(
             },
         }
     }
+}
+
+fn publish_line(task: &WorkerTask, line: &str) {
+    let name = &task.plugin.manifest.name;
+    match protocol::parse_output(line, name, &task.plugin.manifest.permissions, &task.counter) {
+        Ok(event) => {
+            let _ = task.bus.publish(event);
+        }
+        Err(error) => eprintln!("[plugin:{name}] {error}"),
+    }
+}
+
+/// Lee la salida pendiente de un worker que ya terminó: el proceso puede salir
+/// antes de que se hayan leído sus últimas líneas de stdout/stderr.
+async fn drain_output(
+    task: &WorkerTask,
+    stdout: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    stderr: &mut tokio::io::Lines<BufReader<tokio::process::ChildStderr>>,
+    mut stdout_open: bool,
+    mut stderr_open: bool,
+) {
+    let name = &task.plugin.manifest.name;
+    let drain = async {
+        while stdout_open || stderr_open {
+            tokio::select! {
+                line = stdout.next_line(), if stdout_open => match line {
+                    Ok(Some(line)) => publish_line(task, &line),
+                    _ => stdout_open = false,
+                },
+                line = stderr.next_line(), if stderr_open => match line {
+                    Ok(Some(line)) => eprintln!("[plugin:{name}] {line}"),
+                    _ => stderr_open = false,
+                },
+            }
+        }
+    };
+    // Un proceso nieto puede heredar los pipes y mantenerlos abiertos.
+    let _ = tokio::time::timeout(DRAIN_TIMEOUT, drain).await;
 }
 
 fn event_type(event: &EventData) -> &str {
