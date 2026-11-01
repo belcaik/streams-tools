@@ -11,4 +11,5 @@ serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error.workspace = true
 streams-tools-core = { path = "../core" }
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "sync", "time"] }
 toml.workspace = true
