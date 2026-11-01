@@ -6,3 +6,8 @@ edition.workspace = true
 [[bin]]
 name = "streams-tools"
 path = "src/main.rs"
+
+[dependencies]
+streams-tools-core = { path = "../core" }
+streams-tools-server = { path = "../server" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
