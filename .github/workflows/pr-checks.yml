@@ -39,9 +39,18 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           # Los lockfiles no cuentan para el límite (CONTRIBUTING.md).
-          changed_lines=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
-            --jq '.[] | select(.filename | test("(^|/)(Cargo|package-lock|pnpm-lock|yarn)\\.(lock|json|yaml)$") | not) | .additions + .deletions' |
-            awk '{ total += $1 } END { print total + 0 }')
+          lockfiles='(^|/)(Cargo|package-lock|pnpm-lock|yarn)\.(lock|json|yaml)$'
+          changed_lines=0
+          page=1
+          while :; do
+            files=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$REPO/pulls/$PR_NUMBER/files?per_page=100&page=$page")
+            [[ $(jq length <<<"$files") -eq 0 ]] && break
+            lines=$(jq --arg re "$lockfiles" \
+              '[.[] | select(.filename | test($re) | not) | .additions + .deletions] | add // 0' <<<"$files")
+            changed_lines=$((changed_lines + lines))
+            page=$((page + 1))
+          done
           echo "Líneas cambiadas (sin lockfiles): $changed_lines"
           if (( changed_lines > 800 )); then
             echo "::error::La PR supera el máximo de 800 líneas; divídela"
