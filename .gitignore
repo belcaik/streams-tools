@@ -12,6 +12,7 @@ Thumbs.db
 !.env.example
 
 # Artefactos de build y logs
+/target/
 dist/
 build/
 *.log
