@@ -568,6 +568,7 @@ name = "streams-tools-cli"
 version = "0.1.0"
 dependencies = [
  "streams-tools-core",
+ "streams-tools-plugins",
  "streams-tools-server",
  "tokio",
 ]
