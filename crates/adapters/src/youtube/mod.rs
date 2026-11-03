@@ -1,3 +1,7 @@
+// Se cablea desde session.rs en la siguiente PR.
+#[allow(dead_code)]
+mod resolve;
+
 pub mod map;
 
 use serde::{Deserialize, Serialize};
