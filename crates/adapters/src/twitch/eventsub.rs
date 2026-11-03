@@ -1,18 +1,9 @@
-use std::{
-    collections::{BTreeSet, HashSet, VecDeque},
-    error::Error,
-    fmt,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{collections::BTreeSet, error::Error, fmt, sync::Arc, time::Duration};
 
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
-use serde_json::{Value, json};
-use streams_tools_core::{Bus, Event, EventData, Platform, PluginData, User};
+use serde_json::Value;
+use streams_tools_core::{Bus, Event, Platform};
 use tokio::{sync::watch, task::JoinHandle, time::Instant};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
 
@@ -22,6 +13,7 @@ use super::{
     helix::Helix,
     map,
 };
+use crate::common::{RecentIds, next_backoff, system};
 
 pub struct TwitchAdapter {
     shutdown: watch::Sender<bool>,
@@ -84,6 +76,9 @@ async fn run(
     let prompt_bus = bus.clone();
     let prompt: Prompt = Arc::new(move |authorization| {
         let _ = prompt_bus.publish(system(
+            Platform::Twitch,
+            "twitch",
+            "Twitch",
             "auth_required",
             "Autoriza streams-tools en Twitch para conectar el canal".into(),
         ));
@@ -106,7 +101,7 @@ async fn run(
         http,
         auth.clone(),
     );
-    let mut dedupe = Dedupe::new();
+    let mut dedupe = RecentIds::new();
     let mut backoff = Duration::ZERO;
     let mut reconnect_url = None;
     loop {
@@ -125,7 +120,13 @@ async fn run(
         match opened {
             Ok(session) => {
                 backoff = Duration::ZERO;
-                let _ = bus.publish(system("connected", "EventSub conectado".into()));
+                let _ = bus.publish(system(
+                    Platform::Twitch,
+                    "twitch",
+                    "Twitch",
+                    "connected",
+                    "EventSub conectado".into(),
+                ));
                 match drive(session, &bus, &mut dedupe, &mut shutdown).await {
                     SessionEnd::Reconnect(url) => {
                         reconnect_url = Some(url);
@@ -133,14 +134,26 @@ async fn run(
                     }
                     SessionEnd::Dropped(reason) => {
                         eprintln!("Twitch: sesión terminada: {reason}");
-                        let _ = bus.publish(system("disconnected", reason));
+                        let _ = bus.publish(system(
+                            Platform::Twitch,
+                            "twitch",
+                            "Twitch",
+                            "disconnected",
+                            reason,
+                        ));
                     }
                     SessionEnd::Shutdown => return,
                 }
             }
             Err(error) => {
                 eprintln!("Twitch: no se pudo conectar: {error}");
-                let _ = bus.publish(system("disconnected", error));
+                let _ = bus.publish(system(
+                    Platform::Twitch,
+                    "twitch",
+                    "Twitch",
+                    "disconnected",
+                    error,
+                ));
             }
         }
         backoff = next_backoff(backoff);
@@ -217,7 +230,7 @@ async fn open_session(
 async fn drive(
     mut session: Session,
     bus: &Bus,
-    dedupe: &mut Dedupe,
+    dedupe: &mut RecentIds,
     shutdown: &mut watch::Receiver<bool>,
 ) -> SessionEnd {
     let mut deadline = Instant::now() + session.keepalive;
@@ -305,33 +318,6 @@ enum FrameAction {
     Reconnect(String),
 }
 
-struct Dedupe {
-    ids: HashSet<String>,
-    order: VecDeque<String>,
-}
-
-impl Dedupe {
-    fn new() -> Self {
-        Self {
-            ids: HashSet::new(),
-            order: VecDeque::new(),
-        }
-    }
-
-    fn insert(&mut self, id: String) -> bool {
-        if !self.ids.insert(id.clone()) {
-            return false;
-        }
-        self.order.push_back(id);
-        if self.order.len() > 512
-            && let Some(oldest) = self.order.pop_front()
-        {
-            self.ids.remove(&oldest);
-        }
-        true
-    }
-}
-
 pub(crate) fn required_scopes(events: &BTreeSet<TwitchEvent>) -> Vec<String> {
     let mut scopes = BTreeSet::new();
     for event in events {
@@ -357,18 +343,6 @@ pub(crate) fn required_scopes(events: &BTreeSet<TwitchEvent>) -> Vec<String> {
     scopes.into_iter().map(str::to_owned).collect()
 }
 
-fn next_backoff(current: Duration) -> Duration {
-    Duration::from_secs(match current.as_secs() {
-        0 => 1,
-        1 => 2,
-        2 => 4,
-        4 => 8,
-        8 => 16,
-        16 => 32,
-        _ => 60,
-    })
-}
-
 fn parse_message(text: &str) -> Result<Incoming, String> {
     let raw: Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
     let wire: Wire = serde_json::from_value(raw.clone()).map_err(|error| error.to_string())?;
@@ -379,7 +353,7 @@ fn parse_message(text: &str) -> Result<Incoming, String> {
     })
 }
 
-fn process_incoming(incoming: Incoming, dedupe: &mut Dedupe) -> Result<FrameAction, String> {
+fn process_incoming(incoming: Incoming, dedupe: &mut RecentIds) -> Result<FrameAction, String> {
     match incoming.metadata.message_type.as_str() {
         "notification" => {
             if !dedupe.insert(incoming.metadata.message_id) {
@@ -429,54 +403,6 @@ fn process_incoming(incoming: Incoming, dedupe: &mut Dedupe) -> Result<FrameActi
     }
 }
 
-fn system(status: &str, message: String) -> Event {
-    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-    let elapsed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO);
-    Event {
-        id: format!("twitch-system-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed)),
-        platform: Platform::Twitch,
-        event: EventData::Plugin(PluginData {
-            name: "system".into(),
-            data: json!({"status": status, "message": message}),
-        }),
-        user: User {
-            id: "twitch".into(),
-            name: "Twitch".into(),
-            roles: Vec::new(),
-        },
-        ts: format_utc(elapsed),
-    }
-}
-
-fn format_utc(elapsed: Duration) -> String {
-    let seconds = elapsed.as_secs();
-    let days = (seconds / 86_400) as i64;
-    let within_day = seconds % 86_400;
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let day_of_era = z - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let mut year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_prime = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
-    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
-    if month <= 2 {
-        year += 1;
-    }
-    format!(
-        "{year:04}-{:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z",
-        month,
-        within_day / 3_600,
-        (within_day / 60) % 60,
-        within_day % 60,
-        elapsed.subsec_millis()
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,31 +427,6 @@ mod tests {
     }
 
     #[test]
-    fn backoff_saturates_at_sixty_seconds() {
-        let mut backoff = Duration::ZERO;
-        let observed: Vec<_> = (0..8)
-            .map(|_| {
-                backoff = next_backoff(backoff);
-                backoff.as_secs()
-            })
-            .collect();
-        assert_eq!(observed, [1, 2, 4, 8, 16, 32, 60, 60]);
-    }
-
-    #[test]
-    fn dedupe_retains_the_latest_512_ids() {
-        let mut dedupe = Dedupe::new();
-        assert!(dedupe.insert("same".into()));
-        assert!(!dedupe.insert("same".into()));
-        for index in 0..512 {
-            assert!(dedupe.insert(format!("id-{index}")));
-        }
-        assert!(!dedupe.ids.contains("same"));
-        assert_eq!(dedupe.ids.len(), 512);
-        assert!(dedupe.insert("same".into()));
-    }
-
-    #[test]
     fn parser_accepts_extra_fields_and_reads_wire_metadata() {
         let incoming = parse_message(
             r#"{"metadata":{"message_id":"id","message_type":"session_keepalive","message_timestamp":"now","subscription_type":null,"new_field":true},"payload":{},"extra":1}"#,
@@ -533,7 +434,7 @@ mod tests {
         .unwrap();
         assert_eq!(incoming.metadata.message_id, "id");
         assert_eq!(
-            process_incoming(incoming, &mut Dedupe::new()).unwrap(),
+            process_incoming(incoming, &mut RecentIds::new()).unwrap(),
             FrameAction::Keepalive
         );
     }
@@ -545,17 +446,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            process_incoming(incoming, &mut Dedupe::new()).unwrap(),
+            process_incoming(incoming, &mut RecentIds::new()).unwrap(),
             FrameAction::Reconnect("ws://localhost".into())
-        );
-    }
-
-    #[test]
-    fn utc_conversion_matches_the_existing_plugin_algorithm() {
-        assert_eq!(format_utc(Duration::ZERO), "1970-01-01T00:00:00.000Z");
-        assert_eq!(
-            format_utc(Duration::from_millis(1_582_934_423_456)),
-            "2020-02-29T00:00:23.456Z"
         );
     }
 }
