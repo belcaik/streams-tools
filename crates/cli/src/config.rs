@@ -89,8 +89,6 @@ pub(crate) struct YoutubeConfig {
 }
 
 impl YoutubeConfig {
-    // Se cablea desde main.rs en el siguiente commit.
-    #[allow(dead_code)]
     pub(crate) fn into_settings(self) -> YoutubeSettings {
         let channel = self
             .channel
