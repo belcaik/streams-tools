@@ -1007,10 +1007,14 @@ dependencies = [
 name = "streams-tools-cli"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_path_to_error",
+ "streams-tools-adapters",
  "streams-tools-core",
  "streams-tools-plugins",
  "streams-tools-server",
  "tokio",
+ "toml",
 ]
 
 [[package]]
