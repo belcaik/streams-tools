@@ -24,6 +24,10 @@ Solo requiere `git` y un shell POSIX.
 | Sincronizar submódulos | `git submodule update --init --recursive` |
 | Actualizar un submódulo | `git submodule update --remote <ruta>` |
 
+## Plataformas
+
+- [Conectar un canal de Twitch](docs/twitch.md) sin servidor público mediante EventSub WebSocket.
+
 ## Reglas
 
 - **Conventional Commits** (`feat:`, `fix:`, `docs:`...).
