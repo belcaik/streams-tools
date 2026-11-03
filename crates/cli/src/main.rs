@@ -6,7 +6,7 @@ use config::{KickConfig, YoutubeConfig};
 use streams_tools_adapters::{kick::KickAdapter, twitch::TwitchAdapter, youtube::YoutubeAdapter};
 use streams_tools_core::Bus;
 use streams_tools_plugins::{Registry, Supervisor, SupervisorOptions};
-use streams_tools_server::PluginOverlay;
+use streams_tools_server::{AlertAssets, PluginOverlay};
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -120,7 +120,7 @@ async fn main() -> io::Result<()> {
             "disabled"
         }
     );
-    let result = streams_tools_server::serve(bus, addr, overlays, async {
+    let result = streams_tools_server::serve(bus, addr, overlays, AlertAssets::default(), async {
         if let Err(error) = tokio::signal::ctrl_c().await {
             eprintln!("failed to listen for Ctrl+C: {error}");
         }

@@ -1,9 +1,9 @@
-use std::{collections::HashSet, future::Future, net::SocketAddr, path::PathBuf};
+use std::{collections::HashSet, future::Future, net::SocketAddr, path::PathBuf, sync::Arc};
 
 use axum::{
     Json, Router,
     extract::{
-        Query, State,
+        Path as RequestPath, Query, State,
         rejection::JsonRejection,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
@@ -28,13 +28,39 @@ pub struct PluginOverlay {
     pub custom_css: PathBuf,
 }
 
-pub fn router(bus: Bus, overlays: Vec<PluginOverlay>) -> Router {
+#[derive(Debug, Clone)]
+pub struct AlertPackAssets {
+    pub name: String,
+    pub root: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct AlertAssets {
+    pub index: serde_json::Value,
+    pub packs: Vec<AlertPackAssets>,
+}
+
+impl Default for AlertAssets {
+    fn default() -> Self {
+        Self {
+            index: serde_json::json!({"packs": [], "errors": []}),
+            packs: Vec::new(),
+        }
+    }
+}
+
+pub fn router(bus: Bus, overlays: Vec<PluginOverlay>, alerts: AlertAssets) -> Router {
+    let alerts_router = Router::new()
+        .route("/index.json", get(alert_index))
+        .route("/{pack}/{*path}", get(alert_asset))
+        .with_state(Arc::new(alerts));
     let mut router = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/ws", get(websocket))
         .route("/api/events", post(publish))
         .route("/streams.js", get(streams_js))
-        .with_state(bus);
+        .with_state(bus)
+        .nest("/alerts", alerts_router);
     for overlay in overlays {
         let config = overlay.config;
         let custom_css_path = overlay.custom_css;
@@ -63,10 +89,11 @@ pub async fn serve(
     bus: Bus,
     addr: SocketAddr,
     overlays: Vec<PluginOverlay>,
+    alerts: AlertAssets,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, router(bus, overlays))
+    axum::serve(listener, router(bus, overlays, alerts))
         .with_graceful_shutdown(shutdown)
         .await
 }
@@ -74,6 +101,75 @@ pub async fn serve(
 async fn custom_css(path: PathBuf) -> Response {
     let body = tokio::fs::read(path).await.unwrap_or_default();
     ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], body).into_response()
+}
+
+async fn alert_index(State(alerts): State<Arc<AlertAssets>>) -> Json<serde_json::Value> {
+    Json(alerts.index.clone())
+}
+
+async fn alert_asset(
+    State(alerts): State<Arc<AlertAssets>>,
+    RequestPath((pack, path)): RequestPath<(String, String)>,
+) -> Response {
+    let Some(pack) = alerts.packs.iter().find(|candidate| candidate.name == pack) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !valid_asset_path(&path) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Ok(root) = tokio::fs::canonicalize(&pack.root).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Ok(canonical) = tokio::fs::canonicalize(root.join(&path)).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !canonical.starts_with(&root)
+        || !tokio::fs::metadata(&canonical)
+            .await
+            .is_ok_and(|metadata| metadata.is_file())
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Ok(body) = tokio::fs::read(&canonical).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    ([(header::CONTENT_TYPE, alert_content_type(&path))], body).into_response()
+}
+
+fn valid_asset_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && path.split('/').all(|component| {
+            !component.is_empty()
+                && component != "."
+                && component != ".."
+                && component
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        })
+}
+
+fn alert_content_type(path: &str) -> &'static str {
+    let extension = path
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase())
+        .unwrap_or_default();
+    match extension.as_str() {
+        "html" => "text/html; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "js" => "text/javascript; charset=utf-8",
+        "json" => "application/json",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "wav" => "audio/wav",
+        "mp3" => "audio/mpeg",
+        "ogg" => "audio/ogg",
+        _ => "application/octet-stream",
+    }
 }
 
 async fn streams_js() -> impl IntoResponse {

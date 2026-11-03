@@ -22,6 +22,14 @@ impl Drop for TestServer {
 }
 
 async fn start(bus: Bus, overlays: Vec<streams_tools_server::PluginOverlay>) -> TestServer {
+    start_with_alerts(bus, overlays, streams_tools_server::AlertAssets::default()).await
+}
+
+async fn start_with_alerts(
+    bus: Bus,
+    overlays: Vec<streams_tools_server::PluginOverlay>,
+    alerts: streams_tools_server::AlertAssets,
+) -> TestServer {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("ephemeral listener should bind");
@@ -29,9 +37,12 @@ async fn start(bus: Bus, overlays: Vec<streams_tools_server::PluginOverlay>) -> 
         .local_addr()
         .expect("listener should have an address");
     let task = tokio::spawn(async move {
-        axum::serve(listener, streams_tools_server::router(bus, overlays))
-            .await
-            .expect("test server should run");
+        axum::serve(
+            listener,
+            streams_tools_server::router(bus, overlays, alerts),
+        )
+        .await
+        .expect("test server should run");
     });
     TestServer { addr, task }
 }
@@ -296,4 +307,97 @@ async fn custom_css_is_fresh_and_never_not_found() {
     assert!(missing.starts_with("HTTP/1.1 200 OK\r\n"));
     assert!(missing.contains("\r\ncontent-type: text/css; charset=utf-8\r\n"));
     assert_eq!(response_body(&missing), "");
+}
+
+static NEXT_ALERT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+struct AlertDir(std::path::PathBuf);
+
+impl Drop for AlertDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+async fn alert_server() -> (TestServer, AlertDir) {
+    let path = std::env::temp_dir().join(format!(
+        "streams-alert-server-{}-{}",
+        std::process::id(),
+        NEXT_ALERT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let pack = path.join("neon");
+    std::fs::create_dir_all(&pack).expect("alert pack should be created");
+    std::fs::write(pack.join("style.css"), "alert css").expect("CSS should be written");
+    std::fs::write(pack.join("pixel.png"), "png").expect("PNG should be written");
+    let alerts = streams_tools_server::AlertAssets {
+        index: serde_json::json!({
+            "packs": [{"name": "neon", "alerts": []}],
+            "errors": []
+        }),
+        packs: vec![streams_tools_server::AlertPackAssets {
+            name: "neon".into(),
+            root: std::fs::canonicalize(pack).expect("pack root should canonicalize"),
+        }],
+    };
+    let server = start_with_alerts(Bus::new(8).expect("capacity"), Vec::new(), alerts).await;
+    (server, AlertDir(path))
+}
+
+#[tokio::test]
+async fn alert_index_returns_the_exact_catalog() {
+    let (server, _temp) = alert_server().await;
+    let response = request(server.addr, "GET", "/alerts/index.json", "").await;
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert_eq!(
+        response_body(&response),
+        r#"{"errors":[],"packs":[{"alerts":[],"name":"neon"}]}"#
+    );
+}
+
+#[tokio::test]
+async fn serves_alert_css_and_png_with_content_types() {
+    let (server, _temp) = alert_server().await;
+    let css = request(server.addr, "GET", "/alerts/neon/style.css", "").await;
+    assert!(css.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(css.contains("\r\ncontent-type: text/css; charset=utf-8\r\n"));
+    assert_eq!(response_body(&css), "alert css");
+    let png = request(server.addr, "GET", "/alerts/neon/pixel.png", "").await;
+    assert!(png.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(png.contains("\r\ncontent-type: image/png\r\n"));
+    assert_eq!(response_body(&png), "png");
+}
+
+#[tokio::test]
+async fn unknown_alert_pack_returns_not_found() {
+    let (server, _temp) = alert_server().await;
+    let response = request(server.addr, "GET", "/alerts/missing/style.css", "").await;
+    assert!(response.starts_with("HTTP/1.1 404 Not Found\r\n"));
+    assert_eq!(response_body(&response), "");
+}
+
+#[tokio::test]
+async fn alert_assets_reject_traversal_and_escaping_symlinks() {
+    let (server, _temp) = alert_server().await;
+    for path in [
+        "/alerts/neon/../../Cargo.toml",
+        "/alerts/neon/%2e%2e/%2e%2e/Cargo.toml",
+    ] {
+        let response = request(server.addr, "GET", path, "").await;
+        assert!(
+            response.starts_with("HTTP/1.1 400 Bad Request\r\n")
+                || response.starts_with("HTTP/1.1 404 Not Found\r\n"),
+            "{path}: {response}"
+        );
+        assert!(!response_body(&response).contains("[workspace]"));
+    }
+    #[cfg(unix)]
+    {
+        let outside = _temp.0.join("outside.txt");
+        std::fs::write(&outside, "secret").expect("outside file should be written");
+        std::os::unix::fs::symlink(&outside, _temp.0.join("neon/escape.txt"))
+            .expect("escaping symlink should be created");
+        let response = request(server.addr, "GET", "/alerts/neon/escape.txt", "").await;
+        assert!(response.starts_with("HTTP/1.1 404 Not Found\r\n"));
+        assert!(!response_body(&response).contains("secret"));
+    }
 }
