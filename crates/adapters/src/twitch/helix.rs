@@ -204,3 +204,153 @@ async fn success(response: reqwest::Response) -> Result<reqwest::Response, Helix
         .unwrap_or_else(|error| format!("no se pudo leer el cuerpo: {error}"));
     Err(HelixError(format!("error Helix {status}: {body}")))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::twitch::auth::tests::{Server, TempDir, auth as test_auth, server};
+    use axum::{
+        Json, Router,
+        extract::Query,
+        http::{HeaderMap, StatusCode},
+        response::IntoResponse,
+        routing::{get, post},
+    };
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
+    fn helix(server: &Server, dir: &TempDir) -> Helix {
+        let path = dir.0.join("token.json");
+        std::fs::write(&path, r#"{"access_token":"old-token","refresh_token":"old-refresh","expires_at":18446744073709551615,"scopes":["user:read:chat"]}"#).unwrap();
+        let auth = test_auth(server, path, Arc::new(|_| panic!("no prompt expected")));
+        Helix::new(
+            "client-id".into(),
+            server.base.clone(),
+            reqwest::Client::new(),
+            auth,
+        )
+    }
+    fn users(id: &str) -> Json<Value> {
+        Json(json!({"data": [{"id": id, "login": "canal", "display_name": "Canal"}]}))
+    }
+    async fn users_server(account: &'static str) -> Server {
+        let router = Router::new().route(
+            "/helix/users",
+            get(
+                move |headers: HeaderMap, query: Query<HashMap<String, String>>| async move {
+                    assert_eq!(headers["client-id"], "client-id");
+                    assert_eq!(headers["authorization"], "Bearer old-token");
+                    if let Some(login) = query.get("login") {
+                        assert_eq!(login, "canal");
+                    }
+                    users(if query.contains_key("login") {
+                        "42"
+                    } else {
+                        account
+                    })
+                },
+            ),
+        );
+        server(router).await
+    }
+    #[tokio::test]
+    async fn resolves_channel_and_rejects_a_different_account() {
+        let server = users_server("42").await;
+        let dir = TempDir::new();
+        helix(&server, &dir)
+            .resolve_broadcaster("canal")
+            .await
+            .unwrap();
+        let server = users_server("different").await;
+        let dir = TempDir::new();
+        let error = helix(&server, &dir)
+            .resolve_broadcaster("canal")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "la cuenta autorizada no corresponde al canal configurado"
+        );
+    }
+    #[tokio::test]
+    async fn refreshes_once_after_unauthorized() {
+        let tokens = Arc::new(Mutex::new(Vec::<String>::new()));
+        let captured = tokens.clone();
+        let router = Router::new()
+            .route("/helix/users", get(move |headers: HeaderMap| {
+                let captured = captured.clone();
+                async move {
+                    let mut tokens = captured.lock().unwrap();
+                    tokens.push(headers["authorization"].to_str().unwrap().into());
+                    if tokens.len() == 1 {
+                        StatusCode::UNAUTHORIZED.into_response()
+                    } else {
+                        users("42").into_response()
+                    }
+                }
+            }))
+            .route("/oauth2/token", post(|body: String| async move {
+                assert!(body.contains("refresh_token=old-refresh"));
+                Json(json!({"access_token": "new-token", "expires_in": 3600, "scope": ["user:read:chat"]}))
+            }));
+        let server = server(router).await;
+        let dir = TempDir::new();
+        helix(&server, &dir)
+            .resolve_broadcaster("canal")
+            .await
+            .unwrap();
+        assert_eq!(
+            *tokens.lock().unwrap(),
+            ["Bearer old-token", "Bearer new-token", "Bearer new-token"]
+        );
+    }
+    #[tokio::test]
+    async fn creates_all_eight_subscription_bodies() {
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let captured = bodies.clone();
+        let router = Router::new().route(
+            "/helix/eventsub/subscriptions",
+            post(move |Json(body): Json<Value>| {
+                let captured = captured.clone();
+                async move {
+                    captured.lock().unwrap().push(body);
+                    StatusCode::ACCEPTED
+                }
+            }),
+        );
+        let server = server(router).await;
+        let dir = TempDir::new();
+        helix(&server, &dir)
+            .create_subscriptions("42", "session-1", &TwitchEvent::ALL.into_iter().collect())
+            .await
+            .unwrap();
+        let expected = [
+            ("channel.follow", "2"),
+            ("channel.subscribe", "1"),
+            ("channel.subscription.message", "1"),
+            ("channel.subscription.gift", "1"),
+            ("channel.raid", "1"),
+            ("channel.channel_points_custom_reward_redemption.add", "1"),
+            ("channel.chat.message", "1"),
+            ("channel.cheer", "1"),
+        ];
+        let bodies = bodies.lock().unwrap();
+        assert_eq!(bodies.len(), expected.len());
+        for (body, (kind, version)) in bodies.iter().zip(expected) {
+            let condition = match kind {
+                "channel.follow" => json!({"broadcaster_user_id": "42", "moderator_user_id": "42"}),
+                "channel.raid" => json!({"to_broadcaster_user_id": "42"}),
+                "channel.chat.message" => json!({"broadcaster_user_id": "42", "user_id": "42"}),
+                _ => json!({"broadcaster_user_id": "42"}),
+            };
+            assert_eq!(
+                body,
+                &json!({
+                    "type": kind, "version": version, "condition": condition,
+                    "transport": {"method": "websocket", "session_id": "session-1"}
+                })
+            );
+        }
+    }
+}
