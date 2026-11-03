@@ -143,7 +143,7 @@ test_mode = false
 | `chat_alerts` | `false` | Chat exige además `chat` en `events` |
 | `test_mode` | `false` | Encola ejemplos deterministas tras cargar el catálogo |
 
-El pack incorporado `default` se activa si no hay alertas externas válidas o si `packs` lo nombra explícitamente; no se mezcla implícitamente con packs externos.
+El pack incorporado `default` se activa si no hay alertas externas válidas o si `packs` lo nombra explícitamente. Además, cuando ningún pack activo tiene una alerta para un evento, se usa la alerta equivalente de `default`: un pack que solo personaliza donaciones no deja sin alerta a follows o subs.
 
 ## Personalización CSS
 
