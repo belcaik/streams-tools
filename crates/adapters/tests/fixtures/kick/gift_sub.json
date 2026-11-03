@@ -1,0 +1,1 @@
+{"event":"App\\Events\\GiftedSubscriptionsEvent","channel":"channel.20","data":"{\"id\":\"gift-1\",\"user_id\":789,\"gifter_username\":\"Carla\",\"gifted_usernames\":[\"u1\",\"u2\",\"u3\",\"u4\",\"u5\"],\"created_at\":\"2026-01-02T03:04:05.678Z\"}"}
