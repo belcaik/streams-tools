@@ -165,7 +165,10 @@ async fn drive(
         for action in actions {
             let event = match map::event(action) {
                 Ok(event) => event,
-                Err(error) => return SessionEnd::Dropped(error.to_string()),
+                Err(error) => {
+                    eprintln!("YouTube: evento inválido: {error}");
+                    continue;
+                }
             };
             if let Some(event) = event
                 && enabled(settings, &event)
