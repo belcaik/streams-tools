@@ -28,6 +28,7 @@ Solo requiere `git` y un shell POSIX.
 
 - [Conectar un canal de Twitch](docs/twitch.md) sin servidor público mediante EventSub WebSocket.
 - [Conectar un canal de Kick](docs/kick.md) sin servidor público mediante el WebSocket público de Pusher.
+- [Conectar un canal de YouTube](docs/youtube.md) sin API key ni OAuth mediante el chat interno Innertube.
 
 ## Reglas
 
