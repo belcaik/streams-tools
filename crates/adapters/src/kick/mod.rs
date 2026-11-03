@@ -1,7 +1,7 @@
-// Se usa desde la sesión Pusher en la siguiente PR del stack.
-pub mod map;
-#[allow(dead_code)]
+mod pusher;
 mod resolve;
+pub use pusher::KickAdapter;
+pub mod map;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
