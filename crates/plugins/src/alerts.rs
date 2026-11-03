@@ -103,13 +103,13 @@ impl AlertManifest {
         let source = fs::read_to_string(&path)
             .map_err(|error| AlertLoadError::new(&path, "<file>", error.to_string()))?;
         let deserializer = toml::Deserializer::parse(&source)
-            .map_err(|error| AlertLoadError::new(&path, "<toml>", error.to_string()))?;
+            .map_err(|error| AlertLoadError::new(&path, "<toml>", error.message().to_string()))?;
         let manifest: Self = serde_path_to_error::deserialize(deserializer).map_err(|error| {
             let field = error.path().to_string();
             AlertLoadError::new(
                 &path,
                 if field.is_empty() { "<toml>" } else { &field },
-                error.into_inner().to_string(),
+                error.into_inner().message().to_string(),
             )
         })?;
         manifest
