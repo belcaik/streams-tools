@@ -1,6 +1,7 @@
-// Se cablea desde session.rs en la siguiente PR.
-#[allow(dead_code)]
 mod resolve;
+mod session;
+
+pub use session::YoutubeAdapter;
 
 pub mod map;
 
