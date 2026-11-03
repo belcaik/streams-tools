@@ -2,7 +2,8 @@ mod config;
 
 use std::{io, net::SocketAddr, path::PathBuf};
 
-use streams_tools_adapters::twitch::TwitchAdapter;
+use config::KickConfig;
+use streams_tools_adapters::{kick::KickAdapter, twitch::TwitchAdapter};
 use streams_tools_core::Bus;
 use streams_tools_plugins::{Registry, Supervisor, SupervisorOptions};
 use streams_tools_server::PluginOverlay;
@@ -79,11 +80,26 @@ async fn main() -> io::Result<()> {
         },
         None => None,
     };
+    let kick = match config.kick.map(KickConfig::into_settings) {
+        Some(settings) => match KickAdapter::start(bus.clone(), settings) {
+            Ok(adapter) => Some(adapter),
+            Err(error) => {
+                eprintln!("Kick: no se pudo iniciar: {error}");
+                None
+            }
+        },
+        None => None,
+    };
     println!(
-        "streams-tools listening on http://{addr}; {} plugins, {workers} workers, {} overlays; twitch {}",
+        "streams-tools listening on http://{addr}; {} plugins, {workers} workers, {} overlays; twitch {}; kick {}",
         plugin_count,
         overlays.len(),
         if twitch.is_some() {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        if kick.is_some() {
             "enabled"
         } else {
             "disabled"
@@ -95,6 +111,9 @@ async fn main() -> io::Result<()> {
         }
     })
     .await;
+    if let Some(adapter) = kick {
+        adapter.shutdown().await;
+    }
     if let Some(adapter) = twitch {
         adapter.shutdown().await;
     }
