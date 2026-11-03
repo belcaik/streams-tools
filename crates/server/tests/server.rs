@@ -29,9 +29,16 @@ async fn start(bus: Bus, overlays: Vec<streams_tools_server::PluginOverlay>) -> 
         .local_addr()
         .expect("listener should have an address");
     let task = tokio::spawn(async move {
-        axum::serve(listener, streams_tools_server::router(bus, overlays))
-            .await
-            .expect("test server should run");
+        axum::serve(
+            listener,
+            streams_tools_server::router(
+                bus,
+                overlays,
+                streams_tools_server::AlertAssets::default(),
+            ),
+        )
+        .await
+        .expect("test server should run");
     });
     TestServer { addr, task }
 }
