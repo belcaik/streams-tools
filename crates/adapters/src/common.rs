@@ -81,7 +81,7 @@ pub(crate) fn now_utc() -> String {
     )
 }
 
-fn format_utc(elapsed: Duration) -> String {
+pub(crate) fn format_utc(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs();
     let days = (seconds / 86_400) as i64;
     let within_day = seconds % 86_400;

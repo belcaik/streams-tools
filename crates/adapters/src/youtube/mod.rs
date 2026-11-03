@@ -1,3 +1,5 @@
+pub mod map;
+
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, time::Duration};
 
