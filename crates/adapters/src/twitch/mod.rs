@@ -1,8 +1,12 @@
 #[allow(dead_code)] // se usa desde feat/twitch-eventsub-session
 mod auth;
 #[allow(dead_code)] // se usa desde feat/twitch-eventsub-session
+mod eventsub;
+#[allow(dead_code)] // se usa desde feat/twitch-eventsub-session
 mod helix;
 pub mod map;
+
+pub use eventsub::TwitchAdapter;
 
 use std::{collections::BTreeSet, path::PathBuf, time::Duration};
 
