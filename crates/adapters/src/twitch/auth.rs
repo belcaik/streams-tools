@@ -186,8 +186,22 @@ impl Auth {
                 ],
             )
             .await?;
-        if !response.status().is_success() {
+        let status = response.status();
+        if matches!(
+            status,
+            reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::UNAUTHORIZED
+        ) {
             return Ok(None);
+        }
+        if !status.is_success() {
+            let body = response.text().await.map_err(|error| {
+                AuthError(format!(
+                    "no se pudo leer el error de renovación {status}: {error}"
+                ))
+            })?;
+            return Err(AuthError(format!(
+                "error de renovación OAuth {status}: {body}"
+            )));
         }
         response
             .json()
@@ -590,6 +604,47 @@ pub(crate) mod tests {
             let saved: Token = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             assert_eq!(saved.access_token, "refreshed-access");
             assert_eq!(saved.refresh_token, "refreshed-refresh");
+        })
+        .await
+        .expect("refresh should finish within two seconds");
+    }
+
+    #[tokio::test]
+    async fn temporary_refresh_error_preserves_token_without_prompt() {
+        timeout(Duration::from_secs(2), async {
+            let dir = TempDir::new();
+            let path = token_file(&dir);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let original = serde_json::to_vec(&Token {
+                access_token: "old-access".into(),
+                refresh_token: "old-refresh".into(),
+                expires_at: unix_now() + 3600,
+                scopes: vec!["user:read:chat".into(), "bits:read".into()],
+            })
+            .unwrap();
+            std::fs::write(&path, &original).unwrap();
+            let prompts = Arc::new(AtomicUsize::new(0));
+            let prompt_count = prompts.clone();
+            let prompt: Prompt = Arc::new(move |_| {
+                prompt_count.fetch_add(1, Ordering::Relaxed);
+            });
+            let router = Router::new().route(
+                "/oauth2/token",
+                post(|body: String| async move {
+                    assert!(body.contains("grant_type=refresh_token"));
+                    assert!(body.contains("refresh_token=old-refresh"));
+                    (StatusCode::SERVICE_UNAVAILABLE, "try later")
+                }),
+            );
+            let server = server(router).await;
+            let auth = auth(&server, path.clone(), prompt);
+
+            let error = auth.access_token(true).await.unwrap_err();
+            assert!(error.to_string().contains("503 Service Unavailable"));
+            assert!(error.to_string().contains("try later"));
+            assert_eq!(prompts.load(Ordering::Relaxed), 0);
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+            assert_eq!(auth.access_token(false).await.unwrap(), "old-access");
         })
         .await
         .expect("refresh should finish within two seconds");
