@@ -27,6 +27,7 @@ Solo requiere `git` y un shell POSIX.
 ## Plataformas
 
 - [Conectar un canal de Twitch](docs/twitch.md) sin servidor público mediante EventSub WebSocket.
+- [Conectar un canal de Kick](docs/kick.md) sin servidor público mediante el WebSocket público de Pusher.
 
 ## Reglas
 
