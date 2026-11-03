@@ -8,7 +8,11 @@ name = "streams-tools"
 path = "src/main.rs"
 
 [dependencies]
+serde.workspace = true
+serde_path_to_error.workspace = true
+streams-tools-adapters = { path = "../adapters" }
 streams-tools-core = { path = "../core" }
 streams-tools-plugins = { path = "../plugins" }
 streams-tools-server = { path = "../server" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+toml.workspace = true

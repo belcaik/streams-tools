@@ -1,5 +1,8 @@
+mod config;
+
 use std::{io, net::SocketAddr, path::PathBuf};
 
+use streams_tools_adapters::twitch::TwitchAdapter;
 use streams_tools_core::Bus;
 use streams_tools_plugins::{Registry, Supervisor, SupervisorOptions};
 use streams_tools_server::PluginOverlay;
@@ -10,6 +13,17 @@ async fn main() -> io::Result<()> {
         println!("streams-tools {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+
+    let config_path = std::env::var_os("STREAMS_CONFIG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("./config.toml"));
+    let config_path = std::path::absolute(config_path)?;
+    let config = config::load(&config_path)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    let data_root = std::env::var_os("STREAMS_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("./data"));
+    let data_root = std::path::absolute(data_root)?;
 
     let addr: SocketAddr = std::env::var("STREAMS_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:7777".into())
@@ -47,26 +61,43 @@ async fn main() -> io::Result<()> {
         }
     }
     let workers = plugins.iter().filter(|plugin| plugin.has_worker()).count();
-    println!(
-        "streams-tools listening on http://{addr}; {} plugins, {workers} workers, {} overlays",
-        plugins.len(),
-        overlays.len()
-    );
+    let plugin_count = plugins.len();
 
     let bus = Bus::new(1024).expect("server bus capacity must be non-zero");
     let options = SupervisorOptions {
-        data_root: std::env::var_os("STREAMS_DATA_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("./data")),
+        data_root: data_root.clone(),
         ..SupervisorOptions::default()
     };
     let supervisor = Supervisor::start(bus.clone(), plugins, options);
+    let twitch = match config.twitch {
+        Some(config) => match TwitchAdapter::start(bus.clone(), config.into_settings(&data_root)) {
+            Ok(adapter) => Some(adapter),
+            Err(error) => {
+                supervisor.shutdown().await;
+                return Err(io::Error::other(error));
+            }
+        },
+        None => None,
+    };
+    println!(
+        "streams-tools listening on http://{addr}; {} plugins, {workers} workers, {} overlays; twitch {}",
+        plugin_count,
+        overlays.len(),
+        if twitch.is_some() {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
     let result = streams_tools_server::serve(bus, addr, overlays, async {
         if let Err(error) = tokio::signal::ctrl_c().await {
             eprintln!("failed to listen for Ctrl+C: {error}");
         }
     })
     .await;
+    if let Some(adapter) = twitch {
+        adapter.shutdown().await;
+    }
     supervisor.shutdown().await;
     result
 }
