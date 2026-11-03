@@ -1,3 +1,5 @@
+#[allow(dead_code)] // se usa desde feat/twitch-eventsub-session
+mod auth;
 pub mod map;
 
 use std::{collections::BTreeSet, path::PathBuf, time::Duration};
