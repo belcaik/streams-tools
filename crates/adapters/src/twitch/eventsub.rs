@@ -1,19 +1,279 @@
 use std::{
     collections::{BTreeSet, HashSet, VecDeque},
-    sync::atomic::{AtomicU64, Ordering},
+    error::Error,
+    fmt,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use streams_tools_core::{Event, EventData, Platform, PluginData, User};
-use tokio::{sync::watch, task::JoinHandle};
+use streams_tools_core::{Bus, Event, EventData, Platform, PluginData, User};
+use tokio::{sync::watch, task::JoinHandle, time::Instant};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
 
-use super::{TwitchEvent, map};
+use super::{
+    TwitchEvent, TwitchSettings,
+    auth::{Auth, Prompt},
+    helix::Helix,
+    map,
+};
 
 pub struct TwitchAdapter {
     shutdown: watch::Sender<bool>,
     task: JoinHandle<()>,
+}
+
+#[derive(Debug)]
+pub struct AdapterError(String);
+
+impl fmt::Display for AdapterError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl Error for AdapterError {}
+
+impl TwitchAdapter {
+    pub fn start(bus: Bus, settings: TwitchSettings) -> Result<Self, AdapterError> {
+        let http = reqwest::Client::builder()
+            .build()
+            .map_err(|error| AdapterError(error.to_string()))?;
+        let (shutdown, receiver) = watch::channel(false);
+        let task = tokio::spawn(run(bus, settings, http, receiver));
+        Ok(Self { shutdown, task })
+    }
+
+    pub async fn shutdown(mut self) {
+        let _ = self.shutdown.send(true);
+        let _ = (&mut self.task).await;
+    }
+}
+
+impl Drop for TwitchAdapter {
+    fn drop(&mut self) {
+        let _ = self.shutdown.send(true);
+        self.task.abort();
+    }
+}
+
+type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+
+struct Session {
+    socket: Socket,
+    keepalive: Duration,
+}
+
+enum SessionEnd {
+    Reconnect(String),
+    Dropped(String),
+    Shutdown,
+}
+
+async fn run(
+    bus: Bus,
+    settings: TwitchSettings,
+    http: reqwest::Client,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let prompt_bus = bus.clone();
+    let prompt: Prompt = Arc::new(move |authorization| {
+        let _ = prompt_bus.publish(system(
+            "auth_required",
+            "Autoriza streams-tools en Twitch para conectar el canal".into(),
+        ));
+        println!(
+            "Twitch: abre {} e introduce el código {}",
+            authorization.verification_uri, authorization.user_code
+        );
+    });
+    let auth = Auth::new(
+        settings.client_id.clone(),
+        required_scopes(&settings.events),
+        settings.data_dir.join("token.json"),
+        settings.urls.identity.clone(),
+        http.clone(),
+        prompt,
+    );
+    let helix = Helix::new(
+        settings.client_id.clone(),
+        settings.urls.helix.clone(),
+        http,
+        auth.clone(),
+    );
+    let mut dedupe = Dedupe::new();
+    let mut backoff = Duration::ZERO;
+    let mut reconnect_url = None;
+    loop {
+        if *shutdown.borrow() {
+            return;
+        }
+        let requested = reconnect_url.take();
+        let migrating = requested.is_some();
+        let url = requested
+            .as_deref()
+            .unwrap_or(settings.urls.websocket.as_str());
+        let opened = tokio::select! {
+            result = open_session(url, &settings, &auth, &helix, migrating) => result,
+            _ = shutdown.changed() => return,
+        };
+        match opened {
+            Ok(session) => {
+                backoff = Duration::ZERO;
+                let _ = bus.publish(system("connected", "EventSub conectado".into()));
+                match drive(session, &bus, &mut dedupe, &mut shutdown).await {
+                    SessionEnd::Reconnect(url) => {
+                        reconnect_url = Some(url);
+                        continue;
+                    }
+                    SessionEnd::Dropped(reason) => {
+                        eprintln!("Twitch: sesión terminada: {reason}");
+                        let _ = bus.publish(system("disconnected", reason));
+                    }
+                    SessionEnd::Shutdown => return,
+                }
+            }
+            Err(error) => {
+                eprintln!("Twitch: no se pudo conectar: {error}");
+                let _ = bus.publish(system("disconnected", error));
+            }
+        }
+        backoff = next_backoff(backoff);
+        tokio::select! {
+            _ = shutdown.changed() => return,
+            _ = tokio::time::sleep(backoff) => {}
+        }
+    }
+}
+
+async fn open_session(
+    url: &str,
+    settings: &TwitchSettings,
+    auth: &Auth,
+    helix: &Helix,
+    migrating: bool,
+) -> Result<Session, String> {
+    let broadcaster = if migrating {
+        None
+    } else {
+        auth.requires_login()
+            .await
+            .map_err(|error| error.to_string())?;
+        auth.access_token(false)
+            .await
+            .map_err(|error| error.to_string())?;
+        Some(
+            helix
+                .resolve_broadcaster(&settings.channel)
+                .await
+                .map_err(|error| error.to_string())?,
+        )
+    };
+    let (mut socket, _) = tokio_tungstenite::connect_async(url)
+        .await
+        .map_err(|error| format!("websocket: {error}"))?;
+    let frame = tokio::time::timeout(Duration::from_secs(10), socket.next())
+        .await
+        .map_err(|_| "timeout esperando session_welcome".to_string())?
+        .ok_or_else(|| "websocket cerrado antes de session_welcome".to_string())?
+        .map_err(|error| error.to_string())?;
+    let Message::Text(text) = frame else {
+        return Err("el primer frame no es session_welcome de texto".into());
+    };
+    let incoming = parse_message(text.as_str())?;
+    if incoming.metadata.message_type != "session_welcome" {
+        return Err("el primer mensaje no es session_welcome".into());
+    }
+    let session = incoming
+        .payload
+        .get("session")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "welcome sin payload.session".to_string())?;
+    let session_id = session
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "welcome sin session.id".to_string())?;
+    let timeout = session
+        .get("keepalive_timeout_seconds")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "welcome sin keepalive_timeout_seconds".to_string())?;
+    if let Some(broadcaster) = broadcaster {
+        helix
+            .create_subscriptions(&broadcaster.id, session_id, &settings.events)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(Session {
+        socket,
+        keepalive: Duration::from_secs(timeout).saturating_add(settings.keepalive_margin),
+    })
+}
+
+async fn drive(
+    mut session: Session,
+    bus: &Bus,
+    dedupe: &mut Dedupe,
+    shutdown: &mut watch::Receiver<bool>,
+) -> SessionEnd {
+    let mut deadline = Instant::now() + session.keepalive;
+    loop {
+        tokio::select! {
+            _ = shutdown.changed() => return SessionEnd::Shutdown,
+            _ = tokio::time::sleep_until(deadline) => {
+                return SessionEnd::Dropped("timeout de keepalive".into());
+            }
+            frame = session.socket.next() => {
+                let frame = match frame {
+                    Some(Ok(frame)) => frame,
+                    Some(Err(error)) => return SessionEnd::Dropped(error.to_string()),
+                    None => return SessionEnd::Dropped("websocket cerrado".into()),
+                };
+                match frame {
+                    Message::Text(text) => {
+                        let incoming = match parse_message(text.as_str()) {
+                            Ok(incoming) => incoming,
+                            Err(error) => {
+                                eprintln!("Twitch: mensaje inválido: {error}");
+                                continue;
+                            }
+                        };
+                        let notification = incoming.metadata.message_type == "notification";
+                        let action = match process_incoming(incoming, dedupe) {
+                            Ok(action) => action,
+                            Err(error) => return SessionEnd::Dropped(error),
+                        };
+                        if notification {
+                            deadline = Instant::now() + session.keepalive;
+                        }
+                        match action {
+                            FrameAction::None => {}
+                            FrameAction::Keepalive => {
+                                deadline = Instant::now() + session.keepalive;
+                            }
+                            FrameAction::Event(event) => {
+                                let _ = bus.publish(event);
+                            }
+                            FrameAction::Reconnect(url) => return SessionEnd::Reconnect(url),
+                        }
+                    }
+                    Message::Ping(payload) => {
+                        if let Err(error) = session.socket.send(Message::Pong(payload)).await {
+                            return SessionEnd::Dropped(error.to_string());
+                        }
+                    }
+                    Message::Close(_) => {
+                        return SessionEnd::Dropped("websocket cerrado por Twitch".into());
+                    }
+                    Message::Pong(_) | Message::Binary(_) | Message::Frame(_) => {}
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -151,11 +411,17 @@ fn process_incoming(incoming: Incoming, dedupe: &mut Dedupe) -> Result<FrameActi
                     .unwrap_or("desconocido")
             };
             eprintln!(
-                "Twitch: revocación tipo={} estado={} motivo={} id={}",
+                "Twitch: revocación tipo={} estado={} motivo={} id={} suscripción={} ts={}",
                 field("type"),
                 field("status"),
                 field("reason"),
-                field("id")
+                field("id"),
+                incoming
+                    .metadata
+                    .subscription_type
+                    .as_deref()
+                    .unwrap_or("desconocido"),
+                incoming.metadata.message_timestamp
             );
             Ok(FrameAction::None)
         }
