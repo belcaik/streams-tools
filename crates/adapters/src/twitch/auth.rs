@@ -136,7 +136,7 @@ impl Auth {
             }
             if !token.refresh_token.is_empty() {
                 if let Some(response) = self.refresh(&token.refresh_token).await? {
-                    let token = response.into_token(None)?;
+                    let token = response.into_token(Some(&token.refresh_token))?;
                     let access = token.access_token.clone();
                     self.persist(&token).await?;
                     state.token = Some(token);
@@ -331,7 +331,7 @@ fn unix_now() -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     use axum::{Json, Router, http::StatusCode, routing::post};
@@ -344,10 +344,10 @@ mod tests {
 
     static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
-    struct TempDir(PathBuf);
+    pub(crate) struct TempDir(pub(crate) PathBuf);
 
     impl TempDir {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let path = std::env::temp_dir().join(format!(
                 "streams-tools-auth-{}-{}",
                 std::process::id(),
@@ -364,8 +364,8 @@ mod tests {
         }
     }
 
-    struct Server {
-        base: String,
+    pub(crate) struct Server {
+        pub(crate) base: String,
         task: JoinHandle<()>,
     }
 
@@ -375,7 +375,7 @@ mod tests {
         }
     }
 
-    async fn server(router: Router) -> Server {
+    pub(crate) async fn server(router: Router) -> Server {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("loopback listener should bind");
@@ -386,7 +386,7 @@ mod tests {
         Server { base, task }
     }
 
-    fn auth(server: &Server, path: PathBuf, prompt: Prompt) -> Auth {
+    pub(crate) fn auth(server: &Server, path: PathBuf, prompt: Prompt) -> Auth {
         Auth::new(
             "client-id".into(),
             vec!["user:read:chat".into(), "bits:read".into()],
