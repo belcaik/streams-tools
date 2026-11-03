@@ -260,3 +260,15 @@ fn rejects_symlink_that_escapes_alert_directory() {
     std::os::unix::fs::symlink(&outside, root.join("audio/escape.ogg")).expect("symlink");
     assert_eq!(error(&root, "symlink").field(), "sound");
 }
+
+#[test]
+fn toml_errors_use_a_single_line_reason() {
+    let dir = TempDir::new();
+    let alert = dir.alert("rota", "event = \"now_playing\"\ntemplate = \"x\"\n");
+
+    let error = AlertManifest::load(&alert).expect_err("unknown event should fail");
+
+    assert_eq!(error.field(), "event");
+    assert!(!error.reason().contains('\n'), "{:?}", error.reason());
+    assert!(error.reason().contains("now_playing"));
+}
