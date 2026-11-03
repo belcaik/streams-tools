@@ -222,7 +222,7 @@ mod tests {
     };
     fn helix(server: &Server, dir: &TempDir) -> Helix {
         let path = dir.0.join("token.json");
-        std::fs::write(&path, r#"{"access_token":"old-token","refresh_token":"old-refresh","expires_at":18446744073709551615,"scopes":["user:read:chat"]}"#).unwrap();
+        std::fs::write(&path, r#"{"access_token":"old-token","refresh_token":"old-refresh","expires_at":18446744073709551615,"scopes":["user:read:chat","bits:read"]}"#).unwrap();
         let auth = test_auth(server, path, Arc::new(|_| panic!("no prompt expected")));
         Helix::new(
             "client-id".into(),
@@ -292,7 +292,7 @@ mod tests {
             }))
             .route("/oauth2/token", post(|body: String| async move {
                 assert!(body.contains("refresh_token=old-refresh"));
-                Json(json!({"access_token": "new-token", "expires_in": 3600, "scope": ["user:read:chat"]}))
+                Json(json!({"access_token": "new-token", "expires_in": 3600, "scope": ["user:read:chat", "bits:read"]}))
             }));
         let server = server(router).await;
         let dir = TempDir::new();

@@ -79,7 +79,14 @@ pub async fn context(keepalive_margin: Duration) -> Context {
         data_dir.join("token.json"),
         json!({
             "access_token": "token", "refresh_token": "refresh",
-            "expires_at": u64::MAX, "scopes": []
+            "expires_at": u64::MAX,
+            "scopes": [
+                "bits:read",
+                "channel:read:redemptions",
+                "channel:read:subscriptions",
+                "moderator:read:followers",
+                "user:read:chat"
+            ]
         })
         .to_string(),
     )

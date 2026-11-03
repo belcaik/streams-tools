@@ -153,9 +153,16 @@ impl Auth {
             return Ok(());
         }
         state.token = match tokio::fs::read(&self.inner.token_path).await {
-            Ok(bytes) => Some(serde_json::from_slice(&bytes).map_err(|error| {
-                AuthError(format!("{}: {error}", self.inner.token_path.display()))
-            })?),
+            Ok(bytes) => {
+                let token: Token = serde_json::from_slice(&bytes).map_err(|error| {
+                    AuthError(format!("{}: {error}", self.inner.token_path.display()))
+                })?;
+                self.inner
+                    .scopes
+                    .iter()
+                    .all(|scope| token.scopes.contains(scope))
+                    .then_some(token)
+            }
             Err(error) if error.kind() == ErrorKind::NotFound => None,
             Err(error) => {
                 return Err(AuthError(format!(
@@ -478,6 +485,72 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn missing_scopes_discard_saved_token_and_start_device_flow() {
+        timeout(Duration::from_secs(2), async {
+            let dir = TempDir::new();
+            let path = token_file(&dir);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                &path,
+                serde_json::to_vec(&Token {
+                    access_token: "old-access".into(),
+                    refresh_token: "old-refresh".into(),
+                    expires_at: unix_now() + 3600,
+                    scopes: vec!["user:read:chat".into()],
+                })
+                .unwrap(),
+            )
+            .unwrap();
+            let prompts = Arc::new(AtomicUsize::new(0));
+            let prompt_count = prompts.clone();
+            let prompt: Prompt = Arc::new(move |_| {
+                prompt_count.fetch_add(1, Ordering::Relaxed);
+            });
+            let router = Router::new()
+                .route(
+                    "/oauth2/device",
+                    post(|body: String| async move {
+                        assert!(body.contains("scopes=bits%3Aread+user%3Aread%3Achat"));
+                        Json(json!({
+                            "device_code": "device-code",
+                            "user_code": "USER-CODE",
+                            "verification_uri": "https://twitch.test/activate",
+                            "expires_in": 30,
+                            "interval": 0
+                        }))
+                    }),
+                )
+                .route(
+                    "/oauth2/token",
+                    post(|body: String| async move {
+                        assert!(body.contains("device_code=device-code"));
+                        Json(json!({
+                            "access_token": "new-access",
+                            "refresh_token": "new-refresh",
+                            "expires_in": 3600,
+                            "scope": ["bits:read", "user:read:chat"]
+                        }))
+                    }),
+                );
+            let server = server(router).await;
+            let auth = Auth::new(
+                "client-id".into(),
+                vec!["bits:read".into(), "user:read:chat".into()],
+                path,
+                server.base.clone(),
+                reqwest::Client::new(),
+                prompt,
+            );
+
+            assert!(auth.requires_login().await.unwrap());
+            assert_eq!(auth.access_token(false).await.unwrap(), "new-access");
+            assert_eq!(prompts.load(Ordering::Relaxed), 1);
+        })
+        .await
+        .expect("device flow should finish within two seconds");
+    }
+
+    #[tokio::test]
     async fn expired_token_refreshes_and_persists_new_credentials() {
         timeout(Duration::from_secs(2), async {
             let dir = TempDir::new();
@@ -489,7 +562,7 @@ pub(crate) mod tests {
                     access_token: "old-access".into(),
                     refresh_token: "old-refresh".into(),
                     expires_at: 0,
-                    scopes: vec!["user:read:chat".into()],
+                    scopes: vec!["user:read:chat".into(), "bits:read".into()],
                 })
                 .unwrap(),
             )
@@ -503,7 +576,7 @@ pub(crate) mod tests {
                         "access_token": "refreshed-access",
                         "refresh_token": "refreshed-refresh",
                         "expires_in": 3600,
-                        "scope": ["user:read:chat"]
+                        "scope": ["user:read:chat", "bits:read"]
                     }))
                 }),
             );
