@@ -10,6 +10,7 @@ use serde::Deserialize;
 use streams_tools_adapters::{
     kick::{DEFAULT_APP_KEY, DEFAULT_CLUSTER, KickEvent, KickSettings},
     twitch::{TwitchEvent, TwitchSettings},
+    youtube::{YoutubeEvent, YoutubeSettings},
 };
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -17,6 +18,7 @@ use streams_tools_adapters::{
 pub(crate) struct Config {
     pub twitch: Option<TwitchConfig>,
     pub kick: Option<KickConfig>,
+    pub youtube: Option<YoutubeConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -75,6 +77,39 @@ fn kick_event_name(event: KickEvent) -> &'static str {
         KickEvent::GiftSub => "gift_sub",
         KickEvent::Raid => "raid",
         KickEvent::Follow => "follow",
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct YoutubeConfig {
+    channel: Option<String>,
+    video_id: Option<String>,
+    events: Option<Vec<YoutubeEvent>>,
+}
+
+impl YoutubeConfig {
+    pub(crate) fn into_settings(self) -> YoutubeSettings {
+        let channel = self
+            .channel
+            .map(|value| value.trim().trim_start_matches('@').to_owned());
+        let video_id = self.video_id.map(|value| value.trim().to_owned());
+        let mut settings = YoutubeSettings::new(channel, video_id);
+        settings.events = self
+            .events
+            .unwrap_or_else(|| YoutubeEvent::ALL.to_vec())
+            .into_iter()
+            .collect();
+        settings
+    }
+}
+
+fn youtube_event_name(event: YoutubeEvent) -> &'static str {
+    match event {
+        YoutubeEvent::Chat => "chat",
+        YoutubeEvent::Donation => "donation",
+        YoutubeEvent::Sub => "sub",
+        YoutubeEvent::GiftSub => "gift_sub",
     }
 }
 
@@ -217,6 +252,47 @@ impl Config {
                         path,
                         "kick.pusher.cluster",
                         "no puede estar vacío".into(),
+                    ));
+                }
+            }
+        }
+        if let Some(youtube) = &self.youtube {
+            if youtube.channel.is_none() && youtube.video_id.is_none() {
+                return Err(ConfigError::new(
+                    path,
+                    "youtube",
+                    "debe configurar channel o video_id".into(),
+                ));
+            }
+            if youtube
+                .channel
+                .as_ref()
+                .is_some_and(|value| value.trim().trim_start_matches('@').is_empty())
+            {
+                return Err(ConfigError::new(
+                    path,
+                    "youtube.channel",
+                    "no puede estar vacío".into(),
+                ));
+            }
+            if youtube
+                .video_id
+                .as_ref()
+                .is_some_and(|value| value.trim().is_empty())
+            {
+                return Err(ConfigError::new(
+                    path,
+                    "youtube.video_id",
+                    "no puede estar vacío".into(),
+                ));
+            }
+            let mut events = BTreeSet::new();
+            for event in youtube.events.iter().flatten() {
+                if !events.insert(*event) {
+                    return Err(ConfigError::new(
+                        path,
+                        "youtube.events",
+                        format!("evento duplicado `{}`", youtube_event_name(*event)),
                     ));
                 }
             }
@@ -389,6 +465,7 @@ mod tests {
         let config = load(&dir.0.join("missing.toml")).unwrap();
         assert!(config.twitch.is_none());
         assert!(config.kick.is_none());
+        assert!(config.youtube.is_none());
     }
 
     #[test]
@@ -481,5 +558,67 @@ mod tests {
             assert_eq!(error.field(), field);
             assert_eq!(error.reason, reason);
         }
+    }
+
+    #[test]
+    fn minimal_youtube_config_requires_identity_and_applies_defaults() {
+        let dir = TempDir::new();
+        let error = load(&dir.write("[youtube]\n")).unwrap_err();
+        assert_eq!(error.field(), "youtube");
+        assert_eq!(error.reason, "debe configurar channel o video_id");
+
+        let path = dir.write("[youtube]\nchannel = ' @canal '\n");
+        let settings = load(&path).unwrap().youtube.unwrap().into_settings();
+        assert_eq!(settings.channel.as_deref(), Some("canal"));
+        assert_eq!(settings.video_id, None);
+        assert_eq!(settings.events, YoutubeEvent::ALL.into_iter().collect());
+    }
+
+    #[test]
+    fn youtube_video_id_has_priority_and_selected_events_are_preserved() {
+        let dir = TempDir::new();
+        let path = dir.write(
+            "[youtube]\nchannel = 'canal'\nvideo_id = ' video-1 '\nevents = ['chat', 'donation']\n",
+        );
+        let settings = load(&path).unwrap().youtube.unwrap().into_settings();
+        assert_eq!(settings.channel.as_deref(), Some("canal"));
+        assert_eq!(settings.video_id.as_deref(), Some("video-1"));
+        assert_eq!(
+            settings.events,
+            [YoutubeEvent::Chat, YoutubeEvent::Donation]
+                .into_iter()
+                .collect()
+        );
+    }
+
+    #[test]
+    fn invalid_youtube_values_have_exact_errors() {
+        for (source, field, reason) in [
+            (
+                "[youtube]\nchannel = ' @ '\n",
+                "youtube.channel",
+                "no puede estar vacío",
+            ),
+            (
+                "[youtube]\nvideo_id = ' '\n",
+                "youtube.video_id",
+                "no puede estar vacío",
+            ),
+            (
+                "[youtube]\nvideo_id = 'id'\nevents = ['sub', 'sub']\n",
+                "youtube.events",
+                "evento duplicado `sub`",
+            ),
+        ] {
+            let dir = TempDir::new();
+            let error = load(&dir.write(source)).unwrap_err();
+            assert_eq!(error.field(), field);
+            assert_eq!(error.reason, reason);
+        }
+        let dir = TempDir::new();
+        let error =
+            load(&dir.write("[youtube]\nvideo_id = 'id'\nevents = ['unknown']\n")).unwrap_err();
+        assert_eq!(error.field(), "youtube.events[0]");
+        assert!(error.to_string().contains("unknown variant"));
     }
 }
