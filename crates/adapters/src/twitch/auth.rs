@@ -329,3 +329,196 @@ fn unix_now() -> u64 {
         .unwrap_or(Duration::ZERO)
         .as_secs()
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+    use axum::{Json, Router, http::StatusCode, routing::post};
+    use serde_json::{Value, json};
+    use tokio::net::TcpListener;
+    use tokio::task::JoinHandle;
+    use tokio::time::timeout;
+
+    use super::*;
+
+    static TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "streams-tools-auth-{}-{}",
+                std::process::id(),
+                TEMP_ID.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir(&path).expect("temp dir should be created");
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct Server {
+        base: String,
+        task: JoinHandle<()>,
+    }
+
+    impl Drop for Server {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    async fn server(router: Router) -> Server {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("loopback listener should bind");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        Server { base, task }
+    }
+
+    fn auth(server: &Server, path: PathBuf, prompt: Prompt) -> Auth {
+        Auth::new(
+            "client-id".into(),
+            vec!["user:read:chat".into(), "bits:read".into()],
+            path,
+            server.base.clone(),
+            reqwest::Client::new(),
+            prompt,
+        )
+    }
+
+    fn token_file(dir: &TempDir) -> PathBuf {
+        dir.0.join("twitch").join("token.json")
+    }
+
+    #[tokio::test]
+    async fn device_flow_polls_persists_and_reloads_without_network() {
+        timeout(Duration::from_secs(2), async {
+            let dir = TempDir::new();
+            let path = token_file(&dir);
+            let prompts = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let captured = prompts.clone();
+            let prompt: Prompt = Arc::new(move |authorization| {
+                captured.lock().unwrap().push(authorization.clone());
+            });
+            let polls = Arc::new(AtomicUsize::new(0));
+            let poll_count = polls.clone();
+            let router = Router::new()
+                .route(
+                    "/oauth2/device",
+                    post(|body: String| async move {
+                        assert!(body.contains("client_id=client-id"));
+                        assert!(body.contains("scopes=user%3Aread%3Achat+bits%3Aread"));
+                        Json(json!({
+                            "device_code": "device-code",
+                            "user_code": "USER-CODE",
+                            "verification_uri": "https://twitch.test/activate",
+                            "expires_in": 30,
+                            "interval": 0
+                        }))
+                    }),
+                )
+                .route(
+                    "/oauth2/token",
+                    post(move |body: String| {
+                        let polls = poll_count.clone();
+                        async move {
+                            assert!(body.contains("device_code=device-code"));
+                            assert!(body.contains(
+                                "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"
+                            ));
+                            assert!(body.contains("scopes=user%3Aread%3Achat+bits%3Aread"));
+                            if polls.fetch_add(1, Ordering::Relaxed) == 0 {
+                                (
+                                    StatusCode::BAD_REQUEST,
+                                    Json(json!({"message": "authorization_pending"})),
+                                )
+                            } else {
+                                (
+                                    StatusCode::OK,
+                                    Json(json!({
+                                        "access_token": "new-access",
+                                        "refresh_token": "new-refresh",
+                                        "expires_in": 3600,
+                                        "scope": ["user:read:chat", "bits:read"]
+                                    })),
+                                )
+                            }
+                        }
+                    }),
+                );
+            let server = server(router).await;
+            let auth = auth(&server, path.clone(), prompt);
+            assert!(auth.requires_login().await.unwrap());
+            assert_eq!(auth.access_token(false).await.unwrap(), "new-access");
+            assert_eq!(polls.load(Ordering::Relaxed), 2);
+            assert_eq!(prompts.lock().unwrap().len(), 1);
+            let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(saved["access_token"], "new-access");
+            assert_eq!(saved["refresh_token"], "new-refresh");
+            assert!(saved["expires_at"].as_u64().unwrap() > unix_now());
+            let reloaded = self::auth(&server, path, Arc::new(|_| panic!("no prompt expected")));
+            drop(server);
+
+            assert!(!reloaded.requires_login().await.unwrap());
+            assert_eq!(reloaded.access_token(false).await.unwrap(), "new-access");
+        })
+        .await
+        .expect("device flow should finish within two seconds");
+    }
+
+    #[tokio::test]
+    async fn expired_token_refreshes_and_persists_new_credentials() {
+        timeout(Duration::from_secs(2), async {
+            let dir = TempDir::new();
+            let path = token_file(&dir);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                &path,
+                serde_json::to_vec(&Token {
+                    access_token: "old-access".into(),
+                    refresh_token: "old-refresh".into(),
+                    expires_at: 0,
+                    scopes: vec!["user:read:chat".into()],
+                })
+                .unwrap(),
+            )
+            .unwrap();
+            let router = Router::new().route(
+                "/oauth2/token",
+                post(|body: String| async move {
+                    assert!(body.contains("grant_type=refresh_token"));
+                    assert!(body.contains("refresh_token=old-refresh"));
+                    Json(json!({
+                        "access_token": "refreshed-access",
+                        "refresh_token": "refreshed-refresh",
+                        "expires_in": 3600,
+                        "scope": ["user:read:chat"]
+                    }))
+                }),
+            );
+            let server = server(router).await;
+            let auth = auth(
+                &server,
+                path.clone(),
+                Arc::new(|_| panic!("no prompt expected")),
+            );
+            assert_eq!(auth.access_token(false).await.unwrap(), "refreshed-access");
+            let saved: Token = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(saved.access_token, "refreshed-access");
+            assert_eq!(saved.refresh_token, "refreshed-refresh");
+        })
+        .await
+        .expect("refresh should finish within two seconds");
+    }
+}
