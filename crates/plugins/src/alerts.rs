@@ -362,3 +362,199 @@ impl fmt::Display for AlertLoadError {
 }
 
 impl Error for AlertLoadError {}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AlertVariationView {
+    pub template: Option<String>,
+    pub image: Option<String>,
+    pub sound: Option<String>,
+    pub weight: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AlertView {
+    pub name: String,
+    pub event: AlertEvent,
+    pub template: String,
+    pub priority: i32,
+    pub duration_ms: u64,
+    pub volume: f64,
+    pub conditions: serde_json::Value,
+    pub sound: Option<String>,
+    pub html: Option<String>,
+    pub css: String,
+    pub js: Option<String>,
+    pub variations: Vec<AlertVariationView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AlertPackView {
+    pub name: String,
+    pub alerts: Vec<AlertView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AlertIssue {
+    pub pack: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alert: Option<String>,
+    pub file: String,
+    pub field: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct AlertIndex {
+    pub packs: Vec<AlertPackView>,
+    pub errors: Vec<AlertIssue>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AlertRegistry {
+    index: AlertIndex,
+    roots: Vec<(String, PathBuf)>,
+}
+
+impl AlertRegistry {
+    pub fn discover(root: &Path) -> std::io::Result<Self> {
+        let entries = match directories(root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
+            }
+            Err(error) => return Err(error),
+        };
+        let mut registry = Self::default();
+        for entry in entries {
+            let pack = entry.file_name().to_string_lossy().into_owned();
+            if let Err(reason) = validate_name(&pack) {
+                registry.issue(&pack, None, pack.clone(), "name", reason);
+                continue;
+            }
+            let pack_root = match fs::canonicalize(entry.path()) {
+                Ok(path) => path,
+                Err(error) => {
+                    registry.issue(&pack, None, pack.clone(), "<file>", error.to_string());
+                    continue;
+                }
+            };
+            let mut view = AlertPackView {
+                name: pack.clone(),
+                alerts: Vec::new(),
+            };
+            let alerts = match directories(&entry.path()) {
+                Ok(alerts) => alerts,
+                Err(error) => {
+                    registry.issue(&pack, None, pack.clone(), "<file>", error.to_string());
+                    registry.roots.push((pack, pack_root));
+                    registry.index.packs.push(view);
+                    continue;
+                }
+            };
+            for alert_entry in alerts {
+                let alert = alert_entry.file_name().to_string_lossy().into_owned();
+                let alert_dir = alert_entry.path();
+                if !alert_dir.join("alert.toml").is_file() {
+                    continue;
+                }
+                let file = format!("{pack}/{alert}/alert.toml");
+                if let Err(reason) = validate_name(&alert) {
+                    registry.issue(&pack, Some(alert), file, "name", reason);
+                    continue;
+                }
+                match AlertManifest::load(&alert_dir) {
+                    Ok(manifest) => view
+                        .alerts
+                        .push(alert_view(&pack, &alert, &alert_dir, manifest)),
+                    Err(error) => {
+                        registry.issue(&pack, Some(alert), file, error.field(), error.reason())
+                    }
+                }
+            }
+            registry.roots.push((pack, pack_root));
+            registry.index.packs.push(view);
+        }
+        Ok(registry)
+    }
+
+    pub fn index(&self) -> &AlertIndex {
+        &self.index
+    }
+
+    pub fn index_json(&self) -> serde_json::Value {
+        serde_json::to_value(&self.index).expect("validated alert index should serialize")
+    }
+
+    pub fn asset_roots(&self) -> impl Iterator<Item = (&str, &Path)> {
+        self.roots
+            .iter()
+            .map(|(name, path)| (name.as_str(), path.as_path()))
+    }
+
+    pub fn valid_alert_count(&self) -> usize {
+        self.index.packs.iter().map(|pack| pack.alerts.len()).sum()
+    }
+
+    pub fn errors(&self) -> &[AlertIssue] {
+        &self.index.errors
+    }
+
+    fn issue(
+        &mut self,
+        pack: &str,
+        alert: Option<String>,
+        file: String,
+        field: &str,
+        reason: impl Into<String>,
+    ) {
+        self.index.errors.push(AlertIssue {
+            pack: pack.into(),
+            alert,
+            file,
+            field: field.into(),
+            reason: reason.into(),
+        });
+    }
+}
+
+fn directories(path: &Path) -> std::io::Result<Vec<fs::DirEntry>> {
+    let mut entries = fs::read_dir(path)?.collect::<Result<Vec<_>, _>>()?;
+    entries.retain(|entry| entry.path().is_dir());
+    entries.sort_by_key(fs::DirEntry::file_name);
+    Ok(entries)
+}
+
+fn alert_view(pack: &str, alert: &str, dir: &Path, manifest: AlertManifest) -> AlertView {
+    let asset = |path: &str| format!("/alerts/{pack}/{alert}/{path}");
+    let optional = |name: &str| dir.join(name).is_file().then(|| asset(name));
+    let conditions = serde_json::to_value(&manifest.conditions)
+        .expect("validated alert conditions should serialize");
+    let mut conditions = conditions;
+    conditions
+        .as_object_mut()
+        .expect("conditions are an object")
+        .retain(|_, value| !value.is_null());
+    AlertView {
+        name: alert.into(),
+        event: manifest.event,
+        template: manifest.template,
+        priority: manifest.priority,
+        duration_ms: manifest.duration_ms,
+        volume: manifest.volume,
+        conditions,
+        sound: manifest.sound.as_deref().map(asset),
+        html: optional("index.html"),
+        css: asset("style.css"),
+        js: optional("script.js"),
+        variations: manifest
+            .variations
+            .into_iter()
+            .map(|variation| AlertVariationView {
+                template: variation.template,
+                image: variation.image.as_deref().map(asset),
+                sound: variation.sound.as_deref().map(asset),
+                weight: variation.weight,
+            })
+            .collect(),
+    }
+}
