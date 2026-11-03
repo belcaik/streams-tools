@@ -5,8 +5,8 @@ use std::{io, net::SocketAddr, path::PathBuf};
 use config::{KickConfig, YoutubeConfig};
 use streams_tools_adapters::{kick::KickAdapter, twitch::TwitchAdapter, youtube::YoutubeAdapter};
 use streams_tools_core::Bus;
-use streams_tools_plugins::{Registry, Supervisor, SupervisorOptions};
-use streams_tools_server::{AlertAssets, PluginOverlay};
+use streams_tools_plugins::{AlertRegistry, Registry, Supervisor, SupervisorOptions};
+use streams_tools_server::{AlertAssets, AlertPackAssets, PluginOverlay};
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -39,12 +39,40 @@ async fn main() -> io::Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("./plugins"));
     let plugins_dir = std::path::absolute(plugins_dir)?;
+    let alerts_dir = std::env::var_os("STREAMS_ALERTS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("./alerts"));
+    let alerts_dir = std::path::absolute(alerts_dir)?;
     let registry = Registry::discover(&plugins_dir).map_err(|error| {
         io::Error::new(error.kind(), format!("{}: {error}", plugins_dir.display()))
     })?;
     for error in registry.errors() {
         eprintln!("[plugin] {error}");
     }
+    let alert_registry = AlertRegistry::discover(&alerts_dir).map_err(|error| {
+        io::Error::new(error.kind(), format!("{}: {error}", alerts_dir.display()))
+    })?;
+    for error in alert_registry.errors() {
+        eprintln!(
+            "[alert] {}: campo {}: {}",
+            alerts_dir.join(&error.file).display(),
+            error.field,
+            error.reason
+        );
+    }
+    let alert_pack_count = alert_registry.index().packs.len();
+    let valid_alert_count = alert_registry.valid_alert_count();
+    let alert_error_count = alert_registry.errors().len();
+    let alert_assets = AlertAssets {
+        index: alert_registry.index_json(),
+        packs: alert_registry
+            .asset_roots()
+            .map(|(name, root)| AlertPackAssets {
+                name: name.into(),
+                root: root.into(),
+            })
+            .collect(),
+    };
 
     let styles_root = std::env::var_os("STREAMS_STYLES_DIR")
         .map(PathBuf::from)
@@ -101,8 +129,14 @@ async fn main() -> io::Result<()> {
         None => None,
     };
     println!(
-        "streams-tools listening on http://{addr}; {} plugins, {workers} workers, {} overlays; twitch {}; kick {}; youtube {}",
+        concat!(
+            "streams-tools listening on http://{}; {} plugins, {} workers, ",
+            "{} overlays; twitch {}; kick {}; youtube {}; ",
+            "{} alert packs, {} valid alerts, {} alert errors"
+        ),
+        addr,
         plugin_count,
+        workers,
         overlays.len(),
         if twitch.is_some() {
             "enabled"
@@ -118,9 +152,12 @@ async fn main() -> io::Result<()> {
             "enabled"
         } else {
             "disabled"
-        }
+        },
+        alert_pack_count,
+        valid_alert_count,
+        alert_error_count
     );
-    let result = streams_tools_server::serve(bus, addr, overlays, AlertAssets::default(), async {
+    let result = streams_tools_server::serve(bus, addr, overlays, alert_assets, async {
         if let Err(error) = tokio::signal::ctrl_c().await {
             eprintln!("failed to listen for Ctrl+C: {error}");
         }
