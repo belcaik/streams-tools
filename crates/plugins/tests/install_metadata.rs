@@ -102,6 +102,11 @@ fn update_reports_cleanup_failure_after_committing_new_plugin() {
     fs::create_dir(&locked).unwrap();
     fs::write(locked.join("file"), "old").unwrap();
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read_dir(&locked).is_ok() {
+        // Con privilegios (root en contenedores CI) los permisos no bloquean el borrado.
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+        return;
+    }
     let second = package(&plugins, "1.1.0");
 
     let result = transaction.update(&second, &metadata("1.1.0"));
