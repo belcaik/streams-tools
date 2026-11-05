@@ -45,6 +45,20 @@ Los arrays no admiten strings vacíos ni duplicados. Selecciona el override del 
 
 No existe permiso implícito para eventos núcleo (`follow`, `sub`, `gift_sub`, `raid`, `donation`, `redemption`, `chat`): hay que declararlos literalmente y sus datos deben respetar su esquema. `config` se entrega como objeto JSON al worker y al overlay.
 
+## Configuración local
+
+No edites el `plugin.toml` instalado. Conserva personalizaciones en el archivo principal:
+
+```toml
+[plugins.config.mi-plugin]
+poll_seconds = 10
+
+[plugins.config.mi-plugin.engine]
+kind = "custom"
+```
+
+El host mezcla tablas recursivamente; arrays y escalares reemplazan el default completo. Cada clave debe existir en `[config]` del manifiesto y conservar su tipo exacto. La configuración local sobrevive actualizaciones y se entrega idéntica al worker y al overlay después de reiniciar. Configurar un plugin aún ausente sólo genera un aviso.
+
 ## Protocolo worker
 
 El worker se ejecuta con la raíz del plugin como directorio actual. Recibe por stdin una primera línea JSONL:

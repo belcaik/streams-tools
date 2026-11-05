@@ -32,7 +32,7 @@ impl TempDir {
         config.insert("title".into(), toml::Value::String("exact config".into()));
         Plugin {
             root,
-            effective_config: serde_json::to_value(&config).unwrap(),
+            effective_config: serde_json::json!({"title":"effective config"}),
             manifest: Manifest {
                 name,
                 version: "1".into(),
@@ -126,7 +126,7 @@ async fn init_reaches_worker_and_only_declared_input_is_forwarded() {
     let supervisor = Supervisor::start(bus.clone(), vec![plugin], temp.options(5));
     let init = next_plugin(&mut subscriber, &name).await;
     let input = observed_input(&init);
-    assert_eq!(input["config"]["title"], "exact config");
+    assert_eq!(input["config"]["title"], "effective config");
     let data_dir = PathBuf::from(input["data_dir"].as_str().expect("data_dir string"));
     assert!(data_dir.is_absolute() && data_dir.is_dir());
     assert_eq!(
