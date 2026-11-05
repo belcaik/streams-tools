@@ -70,7 +70,7 @@ impl Installer {
         })
     }
 
-    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn for_local_tests(options: InstallOptions, api_base: &str) -> Result<Self, InstallError> {
         let source = "<test>";
         let github = GithubClient::with_api_base(api_base)

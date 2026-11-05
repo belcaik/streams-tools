@@ -73,6 +73,10 @@ fn selects_exact_target_then_any_and_rejects_foreign_or_ambiguous_assets() {
 #[tokio::test]
 #[rustfmt::skip]
 async fn fetches_latest_and_tag_and_reports_api_failures() {
+    assert!(
+        GithubClient::with_api_base("http://127.0.0.1:80@example.com")
+            .is_err()
+    );
     let json = r#"{"tag_name":"v1.0.0","draft":false,"prerelease":false,"assets":[]}"#;
     for requested in ["https://github.com/acme/demo", "https://github.com/acme/demo@v1.0.0"] {
         let base = server("200 OK", "Content-Type: application/json\r\n", json);

@@ -6,6 +6,9 @@ edition.workspace = true
 [lib]
 path = "src/lib.rs"
 
+[features]
+test-support = []
+
 [[bin]]
 name = "plugin-test-worker"
 path = "tests/support/worker.rs"

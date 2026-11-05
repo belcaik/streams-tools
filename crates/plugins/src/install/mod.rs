@@ -16,3 +16,17 @@ pub use manager::{
 };
 pub use metadata::{InstalledMetadata, MetadataError, MetadataRecord, MetadataStore};
 pub use source::{PluginSource, RequestedRelease, SourceError};
+
+fn is_local_test_url(value: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(value) else {
+        return false;
+    };
+    url.scheme() == "http"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_some()
+        && url
+            .host_str()
+            .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+            .is_some_and(|address| address.is_loopback())
+}

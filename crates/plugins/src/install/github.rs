@@ -4,6 +4,8 @@ use futures_util::StreamExt;
 use reqwest::{Client, StatusCode, redirect};
 use serde::Deserialize;
 
+#[cfg(any(test, feature = "test-support"))]
+use super::is_local_test_url;
 use super::{PluginSource, RequestedRelease};
 
 const JSON_LIMIT: usize = 1024 * 1024;
@@ -36,18 +38,24 @@ pub struct GithubClient {
 
 impl GithubClient {
     pub fn new() -> Result<Self, GithubError> {
-        Self::with_api_base("https://api.github.com")
+        Self::build("https://api.github.com", false)
     }
 
-    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn with_api_base(api_base: &str) -> Result<Self, GithubError> {
-        let local =
-            api_base.starts_with("http://127.0.0.1:") || api_base.starts_with("http://[::1]:");
-        if !api_base.starts_with("https://") && !local {
+        let local = is_local_test_url(api_base)
+            && reqwest::Url::parse(api_base).is_ok_and(|url| {
+                url.path() == "/" && url.query().is_none() && url.fragment().is_none()
+            });
+        if !local {
             return Err(GithubError(
-                "la base API de prueba debe ser HTTPS o localhost".into(),
+                "la base API de prueba debe ser un origen HTTP loopback".into(),
             ));
         }
+        Self::build(api_base, true)
+    }
+
+    fn build(api_base: &str, local: bool) -> Result<Self, GithubError> {
         let client = Client::builder()
             .user_agent(concat!("streams-tools/", env!("CARGO_PKG_VERSION")))
             .default_headers(
