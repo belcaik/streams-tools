@@ -1,4 +1,4 @@
-streams-tools 0.1.2
+streams-tools 0.2.0
 ===================
 
 1. Copia o renombra config.example.toml como config.toml.
