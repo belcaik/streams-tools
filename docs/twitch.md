@@ -1,5 +1,7 @@
 # Conectar Twitch
 
+Los tokens persistentes viven bajo `data/`: desde el cwd en debug y junto al ejecutable en release. `STREAMS_HOME` cambia la raíz y `STREAMS_DATA_DIR` sólo los datos; un valor relativo siempre parte del cwd.
+
 El adaptador usa EventSub por WebSocket: no necesitas un servidor público, abrir puertos ni pagar un servicio. Chat también llega por EventSub.
 
 ## 1. Crear una aplicación gratuita
