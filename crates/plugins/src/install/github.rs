@@ -31,6 +31,7 @@ pub struct GithubError(String);
 pub struct GithubClient {
     client: Client,
     api_base: String,
+    local: bool,
 }
 
 impl GithubClient {
@@ -74,6 +75,7 @@ impl GithubClient {
         Ok(Self {
             client,
             api_base: api_base.trim_end_matches('/').into(),
+            local,
         })
     }
 
@@ -135,6 +137,58 @@ impl GithubClient {
         }
         Ok(release)
     }
+
+    pub(crate) fn release_asset<'a>(
+        &self,
+        release: &'a Release,
+        source: &PluginSource,
+        target: &str,
+    ) -> Result<&'a Asset, GithubError> {
+        let asset = release.candidate(target)?;
+        self.validate_asset(asset, release, source)?;
+        Ok(asset)
+    }
+
+    pub(crate) fn checksum_asset<'a>(
+        &self,
+        release: &'a Release,
+        source: &PluginSource,
+    ) -> Result<&'a Asset, GithubError> {
+        let matches: Vec<_> = release
+            .assets
+            .iter()
+            .filter(|asset| asset.name == "SHA256SUMS")
+            .collect();
+        if matches.len() != 1 {
+            return Err(GithubError("el release debe contener un SHA256SUMS".into()));
+        }
+        self.validate_asset(matches[0], release, source)?;
+        Ok(matches[0])
+    }
+
+    fn validate_asset(
+        &self,
+        asset: &Asset,
+        release: &Release,
+        source: &PluginSource,
+    ) -> Result<(), GithubError> {
+        let expected = format!(
+            "https://github.com/{}/{}/releases/download/{}/{}",
+            source.owner(),
+            source.repo(),
+            release.tag,
+            asset.name
+        );
+        if asset.url == expected
+            || self.local && asset.url.starts_with(&format!("{}/", self.api_base))
+        {
+            Ok(())
+        } else {
+            Err(GithubError(
+                "browser_download_url no pertenece al release".into(),
+            ))
+        }
+    }
 }
 
 impl Release {
@@ -143,6 +197,23 @@ impl Release {
         source: &PluginSource,
         target: &str,
     ) -> Result<&'a Asset, GithubError> {
+        let asset = self.candidate(target)?;
+        let expected = format!(
+            "https://github.com/{}/{}/releases/download/{}/{}",
+            source.owner(),
+            source.repo(),
+            self.tag,
+            asset.name
+        );
+        if asset.url != expected {
+            return Err(GithubError(
+                "browser_download_url no pertenece al release".into(),
+            ));
+        }
+        Ok(asset)
+    }
+
+    fn candidate(&self, target: &str) -> Result<&Asset, GithubError> {
         let specific = format!("-{target}.zip");
         let mut candidates: Vec<_> = self
             .assets
@@ -162,20 +233,7 @@ impl Release {
                 candidates.len()
             )));
         }
-        let asset = candidates[0];
-        let expected = format!(
-            "https://github.com/{}/{}/releases/download/{}/{}",
-            source.owner(),
-            source.repo(),
-            self.tag,
-            asset.name
-        );
-        if asset.url != expected {
-            return Err(GithubError(
-                "browser_download_url no pertenece al release".into(),
-            ));
-        }
-        Ok(asset)
+        Ok(candidates[0])
     }
 }
 
