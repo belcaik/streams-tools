@@ -1,4 +1,5 @@
 mod alerts;
+pub mod install;
 mod manifest;
 mod protocol;
 mod registry;
