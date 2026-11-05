@@ -55,7 +55,7 @@ impl FsTransaction {
         &self,
         package: &ValidatedPackage,
         metadata: &InstalledMetadata,
-    ) -> Result<(), TransactionError> {
+    ) -> Result<Option<String>, TransactionError> {
         let destination = self.child(&package.name)?;
         let metadata_path = self.metadata.path(&package.name).map_err(meta)?;
         if !destination.is_dir() || self.metadata.read(&package.name).map_err(meta)?.is_none() {
@@ -77,9 +77,19 @@ impl FsTransaction {
             let _ = fs::rename(&metadata_backup, &metadata_path);
             return Err(failure);
         }
-        fs::remove_dir_all(backup).map_err(error)?;
-        fs::remove_file(metadata_backup).map_err(error)?;
-        Ok(())
+        let mut warnings = Vec::new();
+        if let Err(failure) = fs::remove_dir_all(backup) {
+            warnings.push(format!("backup de plugin: {failure}"));
+        }
+        if let Err(failure) = fs::remove_file(metadata_backup) {
+            warnings.push(format!("backup de metadata: {failure}"));
+        }
+        Ok((!warnings.is_empty()).then(|| {
+            format!(
+                "actualización confirmada; limpieza pendiente: {}",
+                warnings.join("; ")
+            )
+        }))
     }
 
     pub fn remove(&self, name: &str) -> Result<(), TransactionError> {

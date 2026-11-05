@@ -307,7 +307,7 @@ impl Installer {
         );
         let transaction = FsTransaction::new(&self.options.plugins_root)
             .map_err(|error| InstallError::new(raw_source, "publicación", error))?;
-        if expected_name.is_some() {
+        let cleanup_warning = if expected_name.is_some() {
             if MetadataStore::new(&self.options.plugins_root)
                 .read(&package.name)
                 .ok()
@@ -323,12 +323,17 @@ impl Installer {
             }
             transaction
                 .update(&package, &metadata)
-                .map_err(|error| InstallError::new(raw_source, "actualización", error))?;
+                .map_err(|error| InstallError::new(raw_source, "actualización", error))?
         } else {
             transaction
                 .publish(&package, &metadata)
                 .map_err(|error| InstallError::new(raw_source, "instalación", error))?;
-        }
+            None
+        };
+        let warning = match cleanup_warning {
+            Some(cleanup) => format!("{warning}\n{cleanup}"),
+            None => warning,
+        };
         Ok(InstallOutcome {
             name: metadata.name,
             changed: true,
