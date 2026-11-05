@@ -45,7 +45,7 @@ fn help_version_and_usage_have_stable_exit_codes() {
     assert!(
         String::from_utf8(output.stdout)
             .unwrap()
-            .starts_with("streams-tools 0.1.0")
+            .starts_with(concat!("streams-tools ", env!("CARGO_PKG_VERSION")))
     );
     let output = command(&temp).args(["plugin", "add"]).output().unwrap();
     assert_eq!(output.status.code(), Some(2));
