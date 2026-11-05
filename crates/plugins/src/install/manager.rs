@@ -77,7 +77,7 @@ impl Installer {
     }
 
     pub async fn add(&self, source: &str) -> Result<InstallOutcome, InstallError> {
-        self.install(source, false).await
+        self.install(source, None).await
     }
 
     pub async fn update(&self, name: Option<&str>) -> Vec<Result<InstallOutcome, InstallError>> {
@@ -107,7 +107,7 @@ impl Installer {
         }
         let mut results = Vec::new();
         for metadata in managed {
-            results.push(self.install(&metadata.source, true).await);
+            results.push(self.install(&metadata.source, Some(&metadata.name)).await);
         }
         results
     }
@@ -230,7 +230,7 @@ impl Installer {
     async fn install(
         &self,
         raw_source: &str,
-        updating: bool,
+        expected_name: Option<&str>,
     ) -> Result<InstallOutcome, InstallError> {
         let source = PluginSource::parse(raw_source)
             .map_err(|error| InstallError::new(raw_source, "fuente", error))?;
@@ -267,6 +267,17 @@ impl Installer {
             &self.options.target,
         )
         .map_err(|error| InstallError::new(raw_source, "validación", error))?;
+        if expected_name.is_some_and(|expected| package.name != expected) {
+            return Err(InstallError::new(
+                raw_source,
+                "actualización",
+                format!(
+                    "el paquete declara `{}` pero se estaba actualizando `{}`",
+                    package.name,
+                    expected_name.unwrap_or_default()
+                ),
+            ));
+        }
         let requested = match source.requested() {
             RequestedRelease::Latest => "latest",
             RequestedRelease::Tag(tag) => tag,
@@ -296,7 +307,7 @@ impl Installer {
         );
         let transaction = FsTransaction::new(&self.options.plugins_root)
             .map_err(|error| InstallError::new(raw_source, "publicación", error))?;
-        if updating {
+        if expected_name.is_some() {
             if MetadataStore::new(&self.options.plugins_root)
                 .read(&package.name)
                 .ok()

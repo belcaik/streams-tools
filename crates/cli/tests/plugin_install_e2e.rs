@@ -171,3 +171,59 @@ async fn ensure_missing_continues_after_one_failure_and_network_loss() {
     );
     assert!(temp.0.join("plugins/good/plugin.toml").is_file());
 }
+
+#[tokio::test]
+async fn update_rejects_a_release_that_changes_the_plugin_name() {
+    let temp = Temp::new();
+    let server = Server::new();
+    releases::publish(
+        &server,
+        "acme",
+        "source-a",
+        "v1.0.0",
+        "plugin-a-any.zip",
+        releases::zip("plugin-a", "1.0.0", false, &[]),
+        true,
+    );
+    releases::publish(
+        &server,
+        "acme",
+        "source-b",
+        "v1.0.0",
+        "plugin-b-any.zip",
+        releases::zip("plugin-b", "1.0.0", false, &[]),
+        true,
+    );
+    let installer = installer(&temp, &server);
+    installer
+        .add("https://github.com/acme/source-a")
+        .await
+        .unwrap();
+    installer
+        .add("https://github.com/acme/source-b")
+        .await
+        .unwrap();
+    releases::publish(
+        &server,
+        "acme",
+        "source-a",
+        "v2.0.0",
+        "plugin-b-any.zip",
+        releases::zip("plugin-b", "2.0.0", false, &[]),
+        true,
+    );
+
+    let error = installer
+        .update(Some("plugin-a"))
+        .await
+        .pop()
+        .unwrap()
+        .unwrap_err();
+
+    assert!(error.to_string().contains("plugin-a"));
+    assert!(
+        fs::read_to_string(temp.0.join("plugins/plugin-b/plugin.toml"))
+            .unwrap()
+            .contains("1.0.0")
+    );
+}
