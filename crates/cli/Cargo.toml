@@ -16,3 +16,7 @@ streams-tools-plugins = { path = "../plugins" }
 streams-tools-server = { path = "../server" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 toml.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true
+zip.workspace = true
