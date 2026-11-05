@@ -1,0 +1,24 @@
+# Copia este archivo como config.toml. La lista vacía funciona sin red.
+[plugins]
+install = []
+# install = [
+#   "https://github.com/belcaik/streams-plugin-tts",
+#   "https://github.com/belcaik/streams-plugin-interactions@v0.1.0",
+#   "https://github.com/belcaik/streams-plugin-alerts@v0.1.0",
+#   "https://github.com/belcaik/streams-plugin-now-playing@v0.1.0",
+# ]
+
+# Activa sólo overrides que existan en el manifiesto instalado.
+[plugins.config.tts]
+volume = 0.8
+show_text = false
+
+[plugins.config.tts.engine]
+kind = "espeak"
+
+# [plugins.config.interactions]
+# rules_file = "mis-reglas.toml"
+
+# [twitch]
+# client_id = "client-id-publico"
+# channel = "nombre_del_canal"

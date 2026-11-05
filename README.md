@@ -4,6 +4,10 @@ Herramientas para streaming. Pensado para ser sencillo y simple de usar.
 
 ## Empezar
 
+Para el ZIP portable, copia `config.example.toml` a `config.toml`, configura las fuentes y ejecuta el binario. No necesita Git ni Cargo. Consulta la [guía de plugins](docs/plugin-install.md).
+
+Para desarrollar desde el repositorio:
+
 ```sh
 git clone --recurse-submodules <url>
 cd streams-tools
@@ -29,6 +33,11 @@ Solo requiere `git` y un shell POSIX.
 - [Conectar un canal de Twitch](docs/twitch.md) sin servidor público mediante EventSub WebSocket.
 - [Conectar un canal de Kick](docs/kick.md) sin servidor público mediante el WebSocket público de Pusher.
 - [Conectar un canal de YouTube](docs/youtube.md) sin API key ni OAuth mediante el chat interno Innertube.
+
+## Plugins
+
+- [Instalar, actualizar, configurar y eliminar plugins](docs/plugin-install.md).
+- [Desarrollar un worker u overlay](docs/plugins.md).
 
 ## Reglas
 

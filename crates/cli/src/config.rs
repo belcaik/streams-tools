@@ -409,6 +409,14 @@ mod tests {
     }
 
     #[test]
+    fn portable_example_is_valid_configuration() {
+        let dir = TempDir::new();
+        let config = load(&dir.write(include_str!("../../../config.example.toml"))).unwrap();
+        assert!(config.plugins.install.is_empty());
+        assert_eq!(config.plugins.config["tts"]["volume"].as_float(), Some(0.8));
+    }
+
+    #[test]
     fn minimal_config_enables_all_events_and_trims_identity() {
         let dir = TempDir::new();
         let path = dir.write("[twitch]\nclient_id = ' client '\nchannel = ' canal '\n");
