@@ -27,10 +27,16 @@ jobs:
             os: macos-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout without plugins
         uses: actions/checkout@v7
-        with:
-          submodules: recursive
+
+      - name: Validate release tag
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
+          test "$TAG" = "v$version"
 
       - name: Install Rust target
         uses: dtolnay/rust-toolchain@v1
@@ -44,7 +50,7 @@ jobs:
       - name: Build release binary
         run: cargo build --locked --release --package streams-tools-cli --target ${{ matrix.target }}
 
-      - name: Package Unix binary
+      - name: Package Unix ZIP
         if: runner.os != 'Windows'
         shell: bash
         env:
@@ -53,10 +59,20 @@ jobs:
         run: |
           archive="streams-tools-${TAG}-${TARGET}"
           mkdir "$archive"
-          cp "target/${TARGET}/release/streams-tools" "$archive/"
-          tar -czf "${archive}.tar.gz" "$archive"
+          install -m 755 "target/${TARGET}/release/streams-tools" "$archive/streams-tools"
+          cp config.example.toml "$archive/config.example.toml"
+          cp docs/release-readme.txt "$archive/README.txt"
+          LC_ALL=C zip -r "${archive}.zip" "$archive"
 
-      - name: Package Windows binary
+          mapfile -t files < <(unzip -Z1 "${archive}.zip" | sed '/\/$/d')
+          test "${#files[@]}" -eq 3
+          printf '%s\n' "${files[@]}" | grep -Fx "$archive/streams-tools"
+          printf '%s\n' "${files[@]}" | grep -Fx "$archive/config.example.toml"
+          printf '%s\n' "${files[@]}" | grep -Fx "$archive/README.txt"
+          ! printf '%s\n' "${files[@]}" | grep -E '(^|/)(plugins|\.git|Cargo\.toml|Cargo\.lock|src)(/|$)'
+          test "$(unzip -ZTs "${archive}.zip" "$archive/streams-tools" | awk 'NR==2 {print substr($1,4,1)}')" = "x"
+
+      - name: Package Windows ZIP
         if: runner.os == 'Windows'
         shell: pwsh
         env:
@@ -64,12 +80,23 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           $archive = "streams-tools-$env:TAG-$env:TARGET"
-          New-Item -ItemType Directory -Path $archive
-          Copy-Item "target/$env:TARGET/release/streams-tools.exe" "$archive/"
+          New-Item -ItemType Directory -Path $archive | Out-Null
+          Copy-Item "target/$env:TARGET/release/streams-tools.exe" "$archive/streams-tools.exe"
+          Copy-Item config.example.toml "$archive/config.example.toml"
+          Copy-Item docs/release-readme.txt "$archive/README.txt"
           Compress-Archive -Path $archive -DestinationPath "$archive.zip"
+
+          $inspect = Join-Path $env:RUNNER_TEMP "inspect-$env:TARGET"
+          Expand-Archive "$archive.zip" $inspect
+          $files = Get-ChildItem $inspect -Recurse -File
+          if ($files.Count -ne 3) { throw "El ZIP debe contener exactamente tres archivos" }
+          $names = $files.FullName | ForEach-Object { $_.Substring($inspect.Length + 1).Replace('\', '/') }
+          @("$archive/streams-tools.exe", "$archive/config.example.toml", "$archive/README.txt") |
+            ForEach-Object { if ($_ -notin $names) { throw "Falta $_" } }
+          if ($names -match '(^|/)(plugins|\.git|Cargo\.toml|Cargo\.lock|src)(/|$)') { throw "Contenido prohibido" }
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v3
         with:
-          files: streams-tools-${{ github.ref_name }}-${{ matrix.target }}.*
+          files: streams-tools-${{ github.ref_name }}-${{ matrix.target }}.zip
           fail_on_unmatched_files: true
