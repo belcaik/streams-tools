@@ -19,4 +19,5 @@ toml.workspace = true
 
 [dev-dependencies]
 sha2.workspace = true
+streams-tools-plugins = { path = "../plugins", features = ["test-support"] }
 zip.workspace = true

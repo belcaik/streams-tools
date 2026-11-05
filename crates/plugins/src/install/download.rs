@@ -12,6 +12,8 @@ use futures_util::StreamExt;
 use reqwest::{Client, redirect};
 use sha2::{Digest, Sha256};
 
+use super::is_local_test_url;
+
 pub const CHECKSUM_LIMIT: usize = 1024 * 1024;
 pub const ZIP_LIMIT: usize = 100 * 1024 * 1024;
 
@@ -35,7 +37,7 @@ impl Downloader {
     pub fn new() -> Result<Self, DownloadError> {
         Self::build(false)
     }
-    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn for_local_tests() -> Result<Self, DownloadError> {
         Self::build(true)
     }
@@ -142,8 +144,8 @@ impl Downloader {
     }
 
     fn validate_url(&self, url: &str) -> Result<(), DownloadError> {
-        let local = url.starts_with("http://127.0.0.1:") || url.starts_with("http://[::1]:");
-        if url.starts_with("https://") || self.allow_local && local {
+        let https = reqwest::Url::parse(url).is_ok_and(|parsed| parsed.scheme() == "https");
+        if https || self.allow_local && is_local_test_url(url) {
             Ok(())
         } else {
             Err(DownloadError("descarga inicial no HTTPS".into()))
