@@ -3,6 +3,7 @@ use std::{
     error::Error,
     fmt, fs,
     path::PathBuf,
+    sync::Arc,
 };
 
 use super::{
@@ -20,6 +21,12 @@ pub struct Installer {
     options: InstallOptions,
     github: GithubClient,
     downloader: Downloader,
+    event_handler: Arc<dyn Fn(&InstallEvent) + Send + Sync>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstallEvent {
+    InstallingThirdPartyCode { owner: String, repo: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +66,7 @@ impl Installer {
             options,
             github,
             downloader,
+            event_handler: Arc::new(|_| {}),
         })
     }
 
@@ -73,7 +81,16 @@ impl Installer {
             options,
             github,
             downloader,
+            event_handler: Arc::new(|_| {}),
         })
+    }
+
+    pub fn with_event_handler(
+        mut self,
+        handler: impl Fn(&InstallEvent) + Send + Sync + 'static,
+    ) -> Self {
+        self.event_handler = Arc::new(handler);
+        self
     }
 
     pub async fn add(&self, source: &str) -> Result<InstallOutcome, InstallError> {
@@ -314,11 +331,6 @@ impl Installer {
             target,
             sha256: package.sha256.clone(),
         };
-        let warning = format!(
-            "ADVERTENCIA: instalar {}/{} permite que streams-tools ejecute su worker y sirva su overlay; instala sólo código de confianza.",
-            source.owner(),
-            source.repo()
-        );
         let transaction = FsTransaction::new(&self.options.plugins_root)
             .map_err(|error| InstallError::new(raw_source, "publicación", error))?;
         let cleanup_warning = if expected_name.is_some() {
@@ -339,19 +351,19 @@ impl Installer {
                 .update(&package, &metadata)
                 .map_err(|error| InstallError::new(raw_source, "actualización", error))?
         } else {
+            (self.event_handler)(&InstallEvent::InstallingThirdPartyCode {
+                owner: source.owner().into(),
+                repo: source.repo().into(),
+            });
             transaction
                 .publish(&package, &metadata)
                 .map_err(|error| InstallError::new(raw_source, "instalación", error))?;
             None
         };
-        let warning = match cleanup_warning {
-            Some(cleanup) => format!("{warning}\n{cleanup}"),
-            None => warning,
-        };
         Ok(InstallOutcome {
             name: metadata.name,
             changed: true,
-            warning: Some(warning),
+            warning: cleanup_warning,
             detail: metadata.tag,
         })
     }
@@ -376,3 +388,14 @@ impl fmt::Display for InstallError {
     }
 }
 impl Error for InstallError {}
+
+impl fmt::Display for InstallEvent {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InstallingThirdPartyCode { owner, repo } => write!(
+                formatter,
+                "ADVERTENCIA: instalar {owner}/{repo} permite que streams-tools ejecute su worker y sirva su overlay; instala sólo código de confianza."
+            ),
+        }
+    }
+}
