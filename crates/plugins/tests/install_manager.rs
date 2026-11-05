@@ -113,3 +113,39 @@ async fn update_unknown_and_unmanaged_remove_are_explicit_errors() {
     assert_eq!(installer.list().unwrap()[0].state, "unmanaged");
     assert!(installer.remove("local").is_err());
 }
+
+#[cfg(unix)]
+#[test]
+fn list_cleans_only_stale_installer_entries_without_following_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let temp = Temp::new();
+    let plugins = temp.0.join("plugins");
+    let tmp = plugins.join(".streams-tools/tmp");
+    fs::create_dir_all(&tmp).unwrap();
+    let stale_pid = std::process::id().saturating_add(1);
+    fs::create_dir(tmp.join(format!("{stale_pid}-1"))).unwrap();
+    fs::create_dir(tmp.join(format!("{stale_pid}-2-backup-demo-plugin"))).unwrap();
+    fs::create_dir(tmp.join(format!("{}-3", std::process::id()))).unwrap();
+    fs::create_dir(tmp.join("unrelated")).unwrap();
+    let outside = temp.0.join("outside");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("keep"), "safe").unwrap();
+    symlink(&outside, tmp.join(format!("{stale_pid}-4"))).unwrap();
+    let installer = Installer::new(InstallOptions {
+        plugins_root: plugins,
+        target: "x86_64-unknown-linux-gnu".into(),
+    })
+    .unwrap();
+
+    installer.list().unwrap();
+
+    assert!(!tmp.join(format!("{stale_pid}-1")).exists());
+    assert!(
+        !tmp.join(format!("{stale_pid}-2-backup-demo-plugin"))
+            .exists()
+    );
+    assert!(tmp.join(format!("{}-3", std::process::id())).exists());
+    assert!(tmp.join("unrelated").exists());
+    assert!(outside.join("keep").is_file());
+}

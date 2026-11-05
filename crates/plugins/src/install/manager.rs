@@ -7,7 +7,7 @@ use std::{
 
 use super::{
     Downloader, FsTransaction, GithubClient, InstalledMetadata, MetadataRecord, MetadataStore,
-    PluginSource, Portability, RequestedRelease, Staging, validate_package,
+    PluginSource, Portability, RequestedRelease, Staging, cleanup_stale, validate_package,
 };
 
 #[derive(Debug, Clone)]
@@ -77,10 +77,14 @@ impl Installer {
     }
 
     pub async fn add(&self, source: &str) -> Result<InstallOutcome, InstallError> {
-        self.install(source, false).await
+        self.prepare(source)?;
+        self.install(source, None).await
     }
 
     pub async fn update(&self, name: Option<&str>) -> Vec<Result<InstallOutcome, InstallError>> {
+        if let Err(error) = self.prepare(name.unwrap_or("<todos>")) {
+            return vec![Err(error)];
+        }
         let store = MetadataStore::new(&self.options.plugins_root);
         let records = match store.list() {
             Ok(records) => records,
@@ -107,7 +111,7 @@ impl Installer {
         }
         let mut results = Vec::new();
         for metadata in managed {
-            results.push(self.install(&metadata.source, true).await);
+            results.push(self.install(&metadata.source, Some(&metadata.name)).await);
         }
         results
     }
@@ -116,6 +120,9 @@ impl Installer {
         &self,
         sources: impl IntoIterator<Item = &'a str>,
     ) -> Vec<Result<InstallOutcome, InstallError>> {
+        if let Err(error) = self.prepare("<configuración>") {
+            return vec![Err(error)];
+        }
         let installed: BTreeSet<_> = MetadataStore::new(&self.options.plugins_root)
             .list()
             .unwrap_or_default()
@@ -137,13 +144,14 @@ impl Installer {
         }
         for (canonical, _) in normalized {
             if !installed.contains(&canonical) {
-                errors.push(self.add(&canonical).await);
+                errors.push(self.install(&canonical, None).await);
             }
         }
         errors
     }
 
     pub fn list(&self) -> Result<Vec<PluginStatus>, InstallError> {
+        self.prepare("<lista>")?;
         let store = MetadataStore::new(&self.options.plugins_root);
         let records = store
             .list()
@@ -216,6 +224,7 @@ impl Installer {
     }
 
     pub fn remove(&self, name: &str) -> Result<InstallOutcome, InstallError> {
+        self.prepare(name)?;
         FsTransaction::new(&self.options.plugins_root)
             .and_then(|transaction| transaction.remove(name))
             .map_err(|error| InstallError::new(name, "eliminación", error))?;
@@ -227,10 +236,15 @@ impl Installer {
         })
     }
 
+    fn prepare(&self, source: &str) -> Result<(), InstallError> {
+        cleanup_stale(&self.options.plugins_root)
+            .map_err(|error| InstallError::new(source, "limpieza", error))
+    }
+
     async fn install(
         &self,
         raw_source: &str,
-        updating: bool,
+        expected_name: Option<&str>,
     ) -> Result<InstallOutcome, InstallError> {
         let source = PluginSource::parse(raw_source)
             .map_err(|error| InstallError::new(raw_source, "fuente", error))?;
@@ -267,6 +281,17 @@ impl Installer {
             &self.options.target,
         )
         .map_err(|error| InstallError::new(raw_source, "validación", error))?;
+        if expected_name.is_some_and(|expected| package.name != expected) {
+            return Err(InstallError::new(
+                raw_source,
+                "actualización",
+                format!(
+                    "el paquete declara `{}` pero se estaba actualizando `{}`",
+                    package.name,
+                    expected_name.unwrap_or_default()
+                ),
+            ));
+        }
         let requested = match source.requested() {
             RequestedRelease::Latest => "latest",
             RequestedRelease::Tag(tag) => tag,
@@ -296,7 +321,7 @@ impl Installer {
         );
         let transaction = FsTransaction::new(&self.options.plugins_root)
             .map_err(|error| InstallError::new(raw_source, "publicación", error))?;
-        if updating {
+        let cleanup_warning = if expected_name.is_some() {
             if MetadataStore::new(&self.options.plugins_root)
                 .read(&package.name)
                 .ok()
@@ -312,12 +337,17 @@ impl Installer {
             }
             transaction
                 .update(&package, &metadata)
-                .map_err(|error| InstallError::new(raw_source, "actualización", error))?;
+                .map_err(|error| InstallError::new(raw_source, "actualización", error))?
         } else {
             transaction
                 .publish(&package, &metadata)
                 .map_err(|error| InstallError::new(raw_source, "instalación", error))?;
-        }
+            None
+        };
+        let warning = match cleanup_warning {
+            Some(cleanup) => format!("{warning}\n{cleanup}"),
+            None => warning,
+        };
         Ok(InstallOutcome {
             name: metadata.name,
             changed: true,

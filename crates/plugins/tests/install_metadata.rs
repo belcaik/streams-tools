@@ -50,7 +50,7 @@ fn metadata_roundtrip_transactions_and_unmanaged_protection() {
     let temp = Temp::new(); let plugins = temp.0.join("plugins"); let transaction = FsTransaction::new(&plugins).unwrap();
     let first = package(&plugins, "1.0.0"); transaction.publish(&first, &metadata("1.0.0")).unwrap();
     assert_eq!(MetadataStore::new(&plugins).read("demo").unwrap(), Some(metadata("1.0.0")));
-    let second = package(&plugins, "1.1.0"); transaction.update(&second, &metadata("1.1.0")).unwrap();
+    let second = package(&plugins, "1.1.0"); let _ = transaction.update(&second, &metadata("1.1.0")).unwrap();
     assert!(fs::read_to_string(plugins.join("demo/plugin.toml")).unwrap().contains("1.1.0"));
     transaction.remove("demo").unwrap(); assert!(!plugins.join("demo").exists());
     fs::create_dir_all(plugins.join("demo")).unwrap();
@@ -67,4 +67,64 @@ fn rejects_corrupt_schema_name_sha_and_target() {
     value = metadata("1.0.0"); value.name = "../demo".into(); assert!(value.validate(None).is_err());
     value = metadata("1.0.0"); value.sha256 = "A".repeat(64); assert!(value.validate(None).is_err());
     value = metadata("1.0.0"); value.target = "other".into(); assert!(value.validate(None).is_err());
+}
+
+#[test]
+fn remove_moves_a_managed_plugin_when_staging_did_not_exist() {
+    let temp = Temp::new();
+    let plugins = temp.0.join("plugins");
+    let transaction = FsTransaction::new(&plugins).unwrap();
+    fs::create_dir(plugins.join("demo")).unwrap();
+    let store = MetadataStore::new(&plugins);
+    fs::create_dir_all(plugins.join(".streams-tools/installed")).unwrap();
+    fs::write(
+        store.path("demo").unwrap(),
+        toml::to_string(&metadata("1.0.0")).unwrap(),
+    )
+    .unwrap();
+
+    transaction.remove("demo").unwrap();
+
+    assert!(!plugins.join("demo").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn update_reports_cleanup_failure_after_committing_new_plugin() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = Temp::new();
+    let plugins = temp.0.join("plugins");
+    let transaction = FsTransaction::new(&plugins).unwrap();
+    let first = package(&plugins, "1.0.0");
+    transaction.publish(&first, &metadata("1.0.0")).unwrap();
+    let locked = plugins.join("demo/locked");
+    fs::create_dir(&locked).unwrap();
+    fs::write(locked.join("file"), "old").unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read_dir(&locked).is_ok() {
+        // Con privilegios (root en contenedores CI) los permisos no bloquean el borrado.
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+        return;
+    }
+    let second = package(&plugins, "1.1.0");
+
+    let result = transaction.update(&second, &metadata("1.1.0"));
+
+    for entry in fs::read_dir(plugins.join(".streams-tools/tmp")).unwrap() {
+        let locked_backup = entry.unwrap().path().join("locked");
+        if locked_backup.exists() {
+            fs::set_permissions(locked_backup, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+    assert!(
+        result
+            .unwrap()
+            .is_some_and(|warning| warning.contains("limpieza pendiente"))
+    );
+    assert!(
+        fs::read_to_string(plugins.join("demo/plugin.toml"))
+            .unwrap()
+            .contains("1.1.0")
+    );
 }
