@@ -4,7 +4,10 @@ use std::{
     io::{Cursor, Read, Write},
     net::TcpListener,
     path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     thread,
 };
 use streams_tools_plugins::install::{InstallOptions, Installer};
@@ -87,7 +90,7 @@ async fn add_update_list_remove_and_ensure_missing_are_managed() {
     let temp = Temp::new(); let (base, handle) = server(6);
     let installer = Installer::for_local_tests(InstallOptions { plugins_root: temp.0.join("plugins"), target: "x86_64-unknown-linux-gnu".into() }, &base).unwrap();
     let added = installer.add("https://github.com/acme/demo").await.unwrap();
-    assert!(added.changed && added.warning.unwrap().contains("código de confianza"));
+    assert!(added.changed && added.warning.is_none());
     assert_eq!(installer.list().unwrap()[0].state, "managed");
     let updated = installer.update(Some("demo")).await.pop().unwrap().unwrap();
     assert!(!updated.changed && updated.detail.contains("v1.0.0"));
@@ -112,6 +115,38 @@ async fn update_unknown_and_unmanaged_remove_are_explicit_errors() {
     .unwrap();
     assert_eq!(installer.list().unwrap()[0].state, "unmanaged");
     assert!(installer.remove("local").is_err());
+}
+
+#[tokio::test]
+async fn add_emits_the_third_party_warning_before_publishing() {
+    let temp = Temp::new();
+    let (base, handle) = server(3);
+    let plugin = temp.0.join("plugins/demo");
+    let observed = Arc::new(Mutex::new(None));
+    let callback_observed = observed.clone();
+    let installer = Installer::for_local_tests(
+        InstallOptions {
+            plugins_root: temp.0.join("plugins"),
+            target: "x86_64-unknown-linux-gnu".into(),
+        },
+        &base,
+    )
+    .unwrap()
+    .with_event_handler(move |event| {
+        *callback_observed.lock().unwrap() = Some((event.to_string(), plugin.exists()));
+    });
+
+    let outcome = installer.add("https://github.com/acme/demo").await.unwrap();
+
+    assert_eq!(
+        observed.lock().unwrap().as_ref(),
+        Some(&(
+            "ADVERTENCIA: instalar acme/demo permite que streams-tools ejecute su worker y sirva su overlay; instala sólo código de confianza.".into(),
+            false,
+        ))
+    );
+    assert!(outcome.warning.is_none());
+    handle.join().unwrap();
 }
 
 #[cfg(unix)]
