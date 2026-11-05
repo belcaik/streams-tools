@@ -117,7 +117,8 @@ impl FsTransaction {
     }
     fn backup(&self, name: &str, suffix: &str) -> PathBuf {
         self.plugins_root.join(".streams-tools/tmp").join(format!(
-            "{name}-{}-{suffix}",
+            "{}-{}-backup-{name}-{suffix}",
+            std::process::id(),
             TRANSACTION_ID.fetch_add(1, Ordering::Relaxed)
         ))
     }
@@ -143,6 +144,47 @@ impl FsTransaction {
             .map_err(error)?;
         fs::rename(&temporary, destination).map_err(error)
     }
+}
+
+pub(crate) fn cleanup_stale(plugins_root: &Path) -> Result<(), TransactionError> {
+    let transaction = FsTransaction::new(plugins_root)?;
+    let tmp = transaction.plugins_root.join(".streams-tools/tmp");
+    for entry in fs::read_dir(&tmp).map_err(error)? {
+        let entry = entry.map_err(error)?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Some(pid) = installer_entry_pid(&name) else {
+            continue;
+        };
+        if pid == std::process::id() {
+            continue;
+        }
+        let path = entry.path();
+        if path.parent() != Some(tmp.as_path()) {
+            return Err(TransactionError("temporal fuera del staging".into()));
+        }
+        let kind = fs::symlink_metadata(&path).map_err(error)?.file_type();
+        if kind.is_dir() {
+            fs::remove_dir_all(path).map_err(error)?;
+        } else {
+            fs::remove_file(path).map_err(error)?;
+        }
+    }
+    Ok(())
+}
+
+fn installer_entry_pid(name: &str) -> Option<u32> {
+    let mut parts = name.splitn(3, '-');
+    let pid = parts.next()?.parse().ok()?;
+    parts.next()?.parse::<u64>().ok()?;
+    if let Some(backup) = parts.next() {
+        let (name, suffix) = backup.strip_prefix("backup-")?.rsplit_once('-')?;
+        if !matches!(suffix, "plugin" | "toml" | "removed") || validate_name(name).is_err() {
+            return None;
+        }
+    }
+    Some(pid)
 }
 
 fn error(error: std::io::Error) -> TransactionError {

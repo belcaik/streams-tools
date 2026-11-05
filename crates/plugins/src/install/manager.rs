@@ -7,7 +7,7 @@ use std::{
 
 use super::{
     Downloader, FsTransaction, GithubClient, InstalledMetadata, MetadataRecord, MetadataStore,
-    PluginSource, Portability, RequestedRelease, Staging, validate_package,
+    PluginSource, Portability, RequestedRelease, Staging, cleanup_stale, validate_package,
 };
 
 #[derive(Debug, Clone)]
@@ -77,10 +77,14 @@ impl Installer {
     }
 
     pub async fn add(&self, source: &str) -> Result<InstallOutcome, InstallError> {
+        self.prepare(source)?;
         self.install(source, None).await
     }
 
     pub async fn update(&self, name: Option<&str>) -> Vec<Result<InstallOutcome, InstallError>> {
+        if let Err(error) = self.prepare(name.unwrap_or("<todos>")) {
+            return vec![Err(error)];
+        }
         let store = MetadataStore::new(&self.options.plugins_root);
         let records = match store.list() {
             Ok(records) => records,
@@ -116,6 +120,9 @@ impl Installer {
         &self,
         sources: impl IntoIterator<Item = &'a str>,
     ) -> Vec<Result<InstallOutcome, InstallError>> {
+        if let Err(error) = self.prepare("<configuración>") {
+            return vec![Err(error)];
+        }
         let installed: BTreeSet<_> = MetadataStore::new(&self.options.plugins_root)
             .list()
             .unwrap_or_default()
@@ -137,13 +144,14 @@ impl Installer {
         }
         for (canonical, _) in normalized {
             if !installed.contains(&canonical) {
-                errors.push(self.add(&canonical).await);
+                errors.push(self.install(&canonical, None).await);
             }
         }
         errors
     }
 
     pub fn list(&self) -> Result<Vec<PluginStatus>, InstallError> {
+        self.prepare("<lista>")?;
         let store = MetadataStore::new(&self.options.plugins_root);
         let records = store
             .list()
@@ -216,6 +224,7 @@ impl Installer {
     }
 
     pub fn remove(&self, name: &str) -> Result<InstallOutcome, InstallError> {
+        self.prepare(name)?;
         FsTransaction::new(&self.options.plugins_root)
             .and_then(|transaction| transaction.remove(name))
             .map_err(|error| InstallError::new(name, "eliminación", error))?;
@@ -225,6 +234,11 @@ impl Installer {
             warning: None,
             detail: "eliminado".into(),
         })
+    }
+
+    fn prepare(&self, source: &str) -> Result<(), InstallError> {
+        cleanup_stale(&self.options.plugins_root)
+            .map_err(|error| InstallError::new(source, "limpieza", error))
     }
 
     async fn install(
