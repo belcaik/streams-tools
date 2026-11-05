@@ -64,12 +64,13 @@ jobs:
           cp docs/release-readme.txt "$archive/README.txt"
           LC_ALL=C zip -r "${archive}.zip" "$archive"
 
-          mapfile -t files < <(unzip -Z1 "${archive}.zip" | sed '/\/$/d')
-          test "${#files[@]}" -eq 3
-          printf '%s\n' "${files[@]}" | grep -Fx "$archive/streams-tools"
-          printf '%s\n' "${files[@]}" | grep -Fx "$archive/config.example.toml"
-          printf '%s\n' "${files[@]}" | grep -Fx "$archive/README.txt"
-          ! printf '%s\n' "${files[@]}" | grep -E '(^|/)(plugins|\.git|Cargo\.toml|Cargo\.lock|src)(/|$)'
+          # macOS trae bash 3.2 (sin mapfile): la lista va en un string.
+          files=$(unzip -Z1 "${archive}.zip" | sed '/\/$/d')
+          test "$(printf '%s\n' "$files" | wc -l | tr -d ' ')" -eq 3
+          printf '%s\n' "$files" | grep -Fx "$archive/streams-tools"
+          printf '%s\n' "$files" | grep -Fx "$archive/config.example.toml"
+          printf '%s\n' "$files" | grep -Fx "$archive/README.txt"
+          ! printf '%s\n' "$files" | grep -E '(^|/)(plugins|\.git|Cargo\.toml|Cargo\.lock|src)(/|$)'
           test "$(unzip -ZTs "${archive}.zip" "$archive/streams-tools" | awk '{print substr($1,4,1); exit}')" = "x"
 
       - name: Package Windows ZIP
