@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
-    fmt,
+    fmt, fs,
     path::PathBuf,
 };
 
@@ -28,6 +28,17 @@ pub struct InstallOutcome {
     pub changed: bool,
     pub warning: Option<String>,
     pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginStatus {
+    pub name: String,
+    pub version: Option<String>,
+    pub state: &'static str,
+    pub source: Option<String>,
+    pub tag: Option<String>,
+    pub target: Option<String>,
+    pub sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +141,90 @@ impl Installer {
             }
         }
         errors
+    }
+
+    pub fn list(&self) -> Result<Vec<PluginStatus>, InstallError> {
+        let store = MetadataStore::new(&self.options.plugins_root);
+        let records = store
+            .list()
+            .map_err(|error| InstallError::new("<metadata>", "listar", error))?;
+        let mut result = BTreeMap::new();
+        for record in records {
+            match record {
+                MetadataRecord::Managed(metadata) => {
+                    let present = self
+                        .options
+                        .plugins_root
+                        .join(&metadata.name)
+                        .join("plugin.toml")
+                        .is_file();
+                    result.insert(
+                        metadata.name.clone(),
+                        PluginStatus {
+                            name: metadata.name,
+                            version: Some(metadata.version),
+                            state: if present { "managed" } else { "broken" },
+                            source: Some(metadata.source),
+                            tag: Some(metadata.tag),
+                            target: Some(metadata.target),
+                            sha256: Some(metadata.sha256),
+                        },
+                    );
+                }
+                MetadataRecord::Broken { name, .. } => {
+                    result.insert(
+                        name.clone(),
+                        PluginStatus {
+                            name,
+                            version: None,
+                            state: "broken",
+                            source: None,
+                            tag: None,
+                            target: None,
+                            sha256: None,
+                        },
+                    );
+                }
+            }
+        }
+        if let Ok(entries) = fs::read_dir(&self.options.plugins_root) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                if !result.contains_key(&name) && path.join("plugin.toml").is_file() {
+                    let version = crate::Manifest::load(&path)
+                        .ok()
+                        .map(|manifest| manifest.version);
+                    result.insert(
+                        name.clone(),
+                        PluginStatus {
+                            name,
+                            version,
+                            state: "unmanaged",
+                            source: None,
+                            tag: None,
+                            target: None,
+                            sha256: None,
+                        },
+                    );
+                }
+            }
+        }
+        Ok(result.into_values().collect())
+    }
+
+    pub fn remove(&self, name: &str) -> Result<InstallOutcome, InstallError> {
+        FsTransaction::new(&self.options.plugins_root)
+            .and_then(|transaction| transaction.remove(name))
+            .map_err(|error| InstallError::new(name, "eliminación", error))?;
+        Ok(InstallOutcome {
+            name: name.into(),
+            changed: true,
+            warning: None,
+            detail: "eliminado".into(),
+        })
     }
 
     async fn install(
