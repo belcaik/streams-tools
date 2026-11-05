@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt, fs,
     io::ErrorKind,
@@ -12,6 +12,7 @@ use streams_tools_adapters::{
     twitch::{TwitchEvent, TwitchSettings},
     youtube::{YoutubeEvent, YoutubeSettings},
 };
+use streams_tools_plugins::install::PluginSource;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -19,6 +20,15 @@ pub(crate) struct Config {
     pub twitch: Option<TwitchConfig>,
     pub kick: Option<KickConfig>,
     pub youtube: Option<YoutubeConfig>,
+    #[serde(default)]
+    pub plugins: PluginsConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct PluginsConfig {
+    pub install: Vec<String>,
+    pub config: BTreeMap<String, toml::Table>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -159,7 +169,7 @@ pub(crate) fn load(path: &Path) -> Result<Config, ConfigError> {
     };
     let deserializer = toml::Deserializer::parse(&source)
         .map_err(|error| ConfigError::new(path, "<toml>", error.to_string()))?;
-    let config: Config = serde_path_to_error::deserialize(deserializer).map_err(|error| {
+    let mut config: Config = serde_path_to_error::deserialize(deserializer).map_err(|error| {
         let field = error.path().to_string();
         ConfigError::new(
             path,
@@ -172,7 +182,20 @@ pub(crate) fn load(path: &Path) -> Result<Config, ConfigError> {
 }
 
 impl Config {
-    fn validate(&self, path: &Path) -> Result<(), ConfigError> {
+    fn validate(&mut self, path: &Path) -> Result<(), ConfigError> {
+        let mut sources = BTreeSet::new();
+        for (index, value) in self.plugins.install.iter_mut().enumerate() {
+            let source = PluginSource::parse(value).map_err(|error| {
+                ConfigError::new(
+                    path,
+                    &format!("plugins.install[{index}]"),
+                    error.to_string(),
+                )
+            })?;
+            *value = source.to_string();
+            sources.insert(value.clone());
+        }
+        self.plugins.install = sources.into_iter().collect();
         if let Some(twitch) = &self.twitch {
             if twitch.client_id.trim().is_empty() {
                 return Err(ConfigError::new(
@@ -368,6 +391,21 @@ mod tests {
         let dir = TempDir::new();
         let config = load(&dir.0.join("missing.toml")).unwrap();
         assert!(config.twitch.is_none());
+    }
+
+    #[test]
+    fn plugin_sources_are_normalized_deduplicated_and_indexed() {
+        let dir = TempDir::new();
+        let path = dir.write("[plugins]\ninstall=['https://github.com/acme/demo.git/', 'https://github.com/acme/demo']\n[plugins.config.demo]\nvolume=0.8");
+        let config = load(&path).unwrap();
+        assert_eq!(config.plugins.install, ["https://github.com/acme/demo"]);
+        assert_eq!(
+            config.plugins.config["demo"]["volume"].as_float(),
+            Some(0.8)
+        );
+        let error =
+            load(&dir.write("[plugins]\ninstall=['http://github.com/acme/demo']")).unwrap_err();
+        assert_eq!(error.field(), "plugins.install[0]");
     }
 
     #[test]
