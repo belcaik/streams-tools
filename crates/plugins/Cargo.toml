@@ -13,9 +13,14 @@ test = false
 bench = false
 
 [dependencies]
+futures-util.workspace = true
+reqwest.workspace = true
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error.workspace = true
+sha2.workspace = true
 streams-tools-core = { path = "../core" }
 tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "sync", "time"] }
 toml.workspace = true
+zip.workspace = true
