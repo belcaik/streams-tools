@@ -6,3 +6,7 @@
 	path = plugins/alerts
 	url = https://github.com/belcaik/streams-plugin-alerts
 	branch = main
+[submodule "plugins/tts"]
+	path = plugins/tts
+	url = https://github.com/belcaik/streams-plugin-tts
+	branch = main
