@@ -56,7 +56,8 @@ async fn main() -> io::Result<()> {
         plugins_root: paths.plugins.clone(),
         target: env!("STREAMS_TARGET_TRIPLE").into(),
     })
-    .map_err(io::Error::other)?;
+    .map_err(io::Error::other)?
+    .with_event_handler(|event| eprintln!("{event}"));
     for result in installer
         .ensure_missing(config.plugins.install.iter().map(String::as_str))
         .await
@@ -207,7 +208,8 @@ async fn run_plugin(command: command::PluginCommand, paths: &paths::Paths) -> io
         plugins_root: paths.plugins.clone(),
         target: env!("STREAMS_TARGET_TRIPLE").into(),
     })
-    .map_err(io::Error::other)?;
+    .map_err(io::Error::other)?
+    .with_event_handler(|event| eprintln!("{event}"));
     let success = match command {
         command::PluginCommand::Add(source) => print_install_result(installer.add(&source).await),
         command::PluginCommand::Update(name) => installer
@@ -215,7 +217,30 @@ async fn run_plugin(command: command::PluginCommand, paths: &paths::Paths) -> io
             .await
             .into_iter()
             .all(print_install_result),
-        command::PluginCommand::Remove(name) => print_install_result(installer.remove(&name)),
+        command::PluginCommand::Remove(name) => {
+            let source = installer
+                .list()
+                .map_err(io::Error::other)?
+                .into_iter()
+                .find(|plugin| plugin.name == name)
+                .and_then(|plugin| plugin.source);
+            let configured = if let Some(source) = source {
+                config::load(&paths.config)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?
+                    .plugins
+                    .install
+                    .contains(&source)
+            } else {
+                false
+            };
+            let removed = print_install_result(installer.remove(&name));
+            if removed && configured {
+                eprintln!(
+                    "ADVERTENCIA: {name} sigue en [plugins].install y se reinstalará al próximo arranque."
+                );
+            }
+            removed
+        }
         command::PluginCommand::List => {
             for plugin in installer.list().map_err(io::Error::other)? {
                 println!(

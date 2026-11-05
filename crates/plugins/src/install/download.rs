@@ -12,6 +12,8 @@ use futures_util::StreamExt;
 use reqwest::{Client, redirect};
 use sha2::{Digest, Sha256};
 
+use super::is_local_test_url;
+
 pub const CHECKSUM_LIMIT: usize = 1024 * 1024;
 pub const ZIP_LIMIT: usize = 100 * 1024 * 1024;
 
@@ -26,7 +28,8 @@ pub struct DownloadError(String);
 
 #[derive(Clone)]
 pub struct Downloader {
-    client: Client,
+    checksum_client: Client,
+    zip_client: Client,
     allow_local: bool,
 }
 
@@ -34,28 +37,24 @@ impl Downloader {
     pub fn new() -> Result<Self, DownloadError> {
         Self::build(false)
     }
-    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn for_local_tests() -> Result<Self, DownloadError> {
         Self::build(true)
     }
 
     fn build(allow_local: bool) -> Result<Self, DownloadError> {
-        let client = Client::builder()
-            .user_agent(concat!("streams-tools/", env!("CARGO_PKG_VERSION")))
+        let checksum_client = client_builder()
             .timeout(Duration::from_secs(30))
-            .redirect(redirect::Policy::custom(|attempt| {
-                if attempt.previous().len() >= 5 {
-                    attempt.error("demasiados redirects")
-                } else if attempt.url().scheme() != "https" {
-                    attempt.error("redirect no HTTPS")
-                } else {
-                    attempt.follow()
-                }
-            }))
+            .build()
+            .map_err(|error| DownloadError(error.to_string()))?;
+        let zip_client = client_builder()
+            .connect_timeout(Duration::from_secs(30))
+            .read_timeout(Duration::from_secs(30))
             .build()
             .map_err(|error| DownloadError(error.to_string()))?;
         Ok(Self {
-            client,
+            checksum_client,
+            zip_client,
             allow_local,
         })
     }
@@ -74,7 +73,7 @@ impl Downloader {
             .remove(asset_name)
             .ok_or_else(|| DownloadError(format!("SHA256SUMS no contiene {asset_name}")))?;
         let response = self
-            .client
+            .zip_client
             .get(asset_url)
             .send()
             .await
@@ -119,7 +118,7 @@ impl Downloader {
 
     async fn bytes(&self, url: &str, limit: usize) -> Result<Vec<u8>, DownloadError> {
         let response = self
-            .client
+            .checksum_client
             .get(url)
             .send()
             .await
@@ -145,13 +144,27 @@ impl Downloader {
     }
 
     fn validate_url(&self, url: &str) -> Result<(), DownloadError> {
-        let local = url.starts_with("http://127.0.0.1:") || url.starts_with("http://[::1]:");
-        if url.starts_with("https://") || self.allow_local && local {
+        let https = reqwest::Url::parse(url).is_ok_and(|parsed| parsed.scheme() == "https");
+        if https || self.allow_local && is_local_test_url(url) {
             Ok(())
         } else {
             Err(DownloadError("descarga inicial no HTTPS".into()))
         }
     }
+}
+
+fn client_builder() -> reqwest::ClientBuilder {
+    Client::builder()
+        .user_agent(concat!("streams-tools/", env!("CARGO_PKG_VERSION")))
+        .redirect(redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 5 {
+                attempt.error("demasiados redirects")
+            } else if attempt.url().scheme() != "https" {
+                attempt.error("redirect no HTTPS")
+            } else {
+                attempt.follow()
+            }
+        }))
 }
 
 fn parse_checksums(bytes: &[u8]) -> Result<BTreeMap<String, String>, DownloadError> {
@@ -201,3 +214,21 @@ impl fmt::Display for DownloadError {
     }
 }
 impl Error for DownloadError {}
+
+#[cfg(test)]
+mod tests {
+    use super::Downloader;
+
+    #[test]
+    fn zip_client_has_only_connect_and_inactivity_timeouts() {
+        let downloader = Downloader::new().unwrap();
+
+        let checksum = format!("{:?}", downloader.checksum_client);
+        let zip = format!("{:?}", downloader.zip_client);
+
+        assert!(checksum.contains("TotalTimeout: 30s"), "{checksum}");
+        assert!(!checksum.contains("read_timeout"));
+        assert!(!zip.contains("TotalTimeout"), "{zip}");
+        assert!(zip.contains("read_timeout: 30s"));
+    }
+}

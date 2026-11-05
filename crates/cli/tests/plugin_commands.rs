@@ -68,3 +68,45 @@ fn list_is_offline_and_reports_unmanaged_plugins() {
         "local\t1\tunmanaged\t-\n"
     );
 }
+
+#[test]
+fn remove_warns_when_the_source_remains_in_plugins_install() {
+    let temp = Temp::new();
+    let plugins = temp.0.join("plugins");
+    fs::create_dir_all(plugins.join("demo")).unwrap();
+    fs::write(
+        plugins.join("demo/plugin.toml"),
+        "name='demo'\nversion='1.0.0'\n[permissions]\nlistens=[]\nemits=[]",
+    )
+    .unwrap();
+    fs::create_dir_all(plugins.join(".streams-tools/installed")).unwrap();
+    fs::write(
+        plugins.join(".streams-tools/installed/demo.toml"),
+        concat!(
+            "schema=1\nname='demo'\nversion='1.0.0'\n",
+            "source='https://github.com/acme/demo'\nrequested='latest'\n",
+            "tag='v1.0.0'\nasset='demo-any.zip'\ntarget='any'\n",
+            "sha256='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\n",
+        ),
+    )
+    .unwrap();
+    let config = temp.0.join("config.toml");
+    fs::write(
+        &config,
+        "[plugins]\ninstall=['https://github.com/acme/demo']\n",
+    )
+    .unwrap();
+
+    let output = command(&temp)
+        .env("STREAMS_CONFIG", config)
+        .args(["plugin", "remove", "demo"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("demo sigue en [plugins].install y se reinstalará al próximo arranque")
+    );
+}
