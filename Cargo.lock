@@ -185,7 +185,7 @@ dependencies = [
 
 [[package]]
 name = "echo-worker"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde_json",
 ]
@@ -1078,7 +1078,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "streams-tools-adapters"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "axum",
  "futures-util",
@@ -1092,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "streams-tools-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_path_to_error",
@@ -1108,7 +1108,7 @@ dependencies = [
 
 [[package]]
 name = "streams-tools-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -1117,7 +1117,7 @@ dependencies = [
 
 [[package]]
 name = "streams-tools-plugins"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "futures-util",
  "reqwest",
@@ -1134,7 +1134,7 @@ dependencies = [
 
 [[package]]
 name = "streams-tools-server"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "axum",
  "futures-util",
