@@ -23,6 +23,7 @@ impl FsTransaction {
     pub fn new(plugins_root: &Path) -> Result<Self, TransactionError> {
         fs::create_dir_all(plugins_root).map_err(error)?;
         let plugins_root = fs::canonicalize(plugins_root).map_err(error)?;
+        fs::create_dir_all(plugins_root.join(".streams-tools/tmp")).map_err(error)?;
         Ok(Self {
             metadata: MetadataStore::new(&plugins_root),
             plugins_root,
