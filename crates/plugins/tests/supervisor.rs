@@ -32,6 +32,7 @@ impl TempDir {
         config.insert("title".into(), toml::Value::String("exact config".into()));
         Plugin {
             root,
+            effective_config: serde_json::to_value(&config).unwrap(),
             manifest: Manifest {
                 name,
                 version: "1".into(),

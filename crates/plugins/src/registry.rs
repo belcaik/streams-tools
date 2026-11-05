@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     error::Error,
     fmt, fs, io,
     path::{Path, PathBuf},
@@ -10,12 +11,14 @@ use crate::{Manifest, ManifestError};
 pub struct Plugin {
     pub root: PathBuf,
     pub manifest: Manifest,
+    pub effective_config: serde_json::Value,
 }
 
 #[derive(Debug, Default)]
 pub struct Registry {
     plugins: Vec<Plugin>,
     errors: Vec<RegistryError>,
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +41,13 @@ impl Plugin {
 
 impl Registry {
     pub fn discover(root: &Path) -> io::Result<Self> {
+        Self::discover_with_config(root, &BTreeMap::new())
+    }
+
+    pub fn discover_with_config(
+        root: &Path,
+        overrides: &BTreeMap<String, toml::Table>,
+    ) -> io::Result<Self> {
         let entries = match fs::read_dir(root) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
@@ -70,11 +80,30 @@ impl Registry {
                 Ok(true) => {}
             }
             match Manifest::load(&plugin_root) {
-                Ok(manifest) => registry.plugins.push(Plugin {
-                    root: plugin_root,
-                    manifest,
-                }),
+                Ok(manifest) => match effective_config(&manifest, overrides.get(&manifest.name)) {
+                    Ok(effective_config) => registry.plugins.push(Plugin {
+                        root: plugin_root,
+                        manifest,
+                        effective_config,
+                    }),
+                    Err((field, reason)) => registry.errors.push(RegistryError {
+                        path: manifest_path,
+                        field,
+                        reason,
+                    }),
+                },
                 Err(error) => registry.errors.push(error.into()),
+            }
+        }
+        for name in overrides.keys() {
+            if !registry
+                .plugins
+                .iter()
+                .any(|plugin| &plugin.manifest.name == name)
+            {
+                registry.warnings.push(format!(
+                    "plugins.config.{name}: no hay un plugin instalado con ese nombre"
+                ));
             }
         }
         Ok(registry)
@@ -88,9 +117,65 @@ impl Registry {
         &self.errors
     }
 
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+
     pub fn into_plugins(self) -> Vec<Plugin> {
         self.plugins
     }
+}
+
+fn effective_config(
+    manifest: &Manifest,
+    overrides: Option<&toml::Table>,
+) -> Result<serde_json::Value, (String, String)> {
+    let mut effective = manifest.config.clone();
+    if let Some(overrides) = overrides {
+        merge_table(
+            &mut effective,
+            overrides,
+            &format!("plugins.config.{}", manifest.name),
+        )?;
+    }
+    serde_json::to_value(effective).map_err(|error| {
+        (
+            format!("plugins.config.{}", manifest.name),
+            error.to_string(),
+        )
+    })
+}
+
+fn merge_table(
+    defaults: &mut toml::Table,
+    overrides: &toml::Table,
+    path: &str,
+) -> Result<(), (String, String)> {
+    for (key, value) in overrides {
+        let field = format!("{path}.{key}");
+        let default = defaults
+            .get_mut(key)
+            .ok_or_else(|| (field.clone(), "clave desconocida".into()))?;
+        match (default, value) {
+            (toml::Value::Table(default), toml::Value::Table(value)) => {
+                merge_table(default, value, &field)?
+            }
+            (default, value) if same_category(default, value) => *default = value.clone(),
+            _ => return Err((field, "tipo incompatible con el valor por defecto".into())),
+        }
+    }
+    Ok(())
+}
+
+fn same_category(left: &toml::Value, right: &toml::Value) -> bool {
+    matches!(
+        (left, right),
+        (toml::Value::String(_), toml::Value::String(_))
+            | (toml::Value::Integer(_), toml::Value::Integer(_))
+            | (toml::Value::Float(_), toml::Value::Float(_))
+            | (toml::Value::Boolean(_), toml::Value::Boolean(_))
+            | (toml::Value::Array(_), toml::Value::Array(_))
+    )
 }
 
 impl RegistryError {
