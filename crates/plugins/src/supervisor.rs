@@ -192,7 +192,7 @@ async fn run_worker(task: &mut WorkerTask) -> RunOutcome {
     let mut stdin = stdin;
     let mut stdout = BufReader::new(stdout).lines();
     let mut stderr = BufReader::new(stderr).lines();
-    let init = json!({"type":"init","config":plugin.manifest.config_json(),"data_dir":data_dir});
+    let init = json!({"type":"init","config":plugin.effective_config.clone(),"data_dir":data_dir});
     let outcome = match write_json(&mut stdin, &init).await {
         Err(error) => RunOutcome::Failure(format!("cannot write init: {error}")),
         Ok(()) => {

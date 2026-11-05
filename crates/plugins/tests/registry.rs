@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -29,6 +30,54 @@ impl TempDir {
         }
         root
     }
+}
+
+#[test]
+fn deep_merges_config_without_mutating_manifest_defaults() {
+    let temp = TempDir::new();
+    temp.plugin("demo", Some("name='demo'\nversion='1'\n[permissions]\nlistens=[]\nemits=[]\n[config]\ntags=['a']\nvolume=1.0\n[config.engine]\nkind='default'\nrate=1"));
+    let overrides: BTreeMap<String, toml::Table> =
+        toml::from_str("[demo]\ntags=['b','c']\nvolume=0.5\n[demo.engine]\nkind='custom'").unwrap();
+    let registry = Registry::discover_with_config(&temp.0, &overrides).unwrap();
+    let plugin = &registry.plugins()[0];
+    assert_eq!(
+        plugin.effective_config["tags"],
+        serde_json::json!(["b", "c"])
+    );
+    assert_eq!(
+        plugin.effective_config["engine"],
+        serde_json::json!({"kind":"custom","rate":1})
+    );
+    assert_eq!(
+        plugin.manifest.config["engine"]["kind"].as_str(),
+        Some("default")
+    );
+}
+
+#[test]
+fn rejects_unknown_and_mismatched_overrides_and_warns_for_missing_plugin() {
+    for source in [
+        "[demo]\nunknown=true",
+        "[demo.engine]\nkind=1",
+        "[demo]\nvolume=1",
+    ] {
+        let temp = TempDir::new();
+        temp.plugin("demo", Some("name='demo'\nversion='1'\n[permissions]\nlistens=[]\nemits=[]\n[config]\nvolume=1.0\n[config.engine]\nkind='default'"));
+        let overrides: BTreeMap<String, toml::Table> = toml::from_str(source).unwrap();
+        let registry = Registry::discover_with_config(&temp.0, &overrides).unwrap();
+        assert!(registry.plugins().is_empty());
+        assert!(
+            registry.errors()[0]
+                .field()
+                .starts_with("plugins.config.demo")
+        );
+    }
+    let temp = TempDir::new();
+    let overrides: BTreeMap<String, toml::Table> =
+        toml::from_str("[future]\nenabled=true").unwrap();
+    let registry = Registry::discover_with_config(&temp.0, &overrides).unwrap();
+    assert!(registry.errors().is_empty());
+    assert!(registry.warnings()[0].contains("plugins.config.future"));
 }
 
 impl Drop for TempDir {
