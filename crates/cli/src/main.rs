@@ -217,7 +217,30 @@ async fn run_plugin(command: command::PluginCommand, paths: &paths::Paths) -> io
             .await
             .into_iter()
             .all(print_install_result),
-        command::PluginCommand::Remove(name) => print_install_result(installer.remove(&name)),
+        command::PluginCommand::Remove(name) => {
+            let source = installer
+                .list()
+                .map_err(io::Error::other)?
+                .into_iter()
+                .find(|plugin| plugin.name == name)
+                .and_then(|plugin| plugin.source);
+            let configured = if let Some(source) = source {
+                config::load(&paths.config)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?
+                    .plugins
+                    .install
+                    .contains(&source)
+            } else {
+                false
+            };
+            let removed = print_install_result(installer.remove(&name));
+            if removed && configured {
+                eprintln!(
+                    "ADVERTENCIA: {name} sigue en [plugins].install y se reinstalará al próximo arranque."
+                );
+            }
+            removed
+        }
         command::PluginCommand::List => {
             for plugin in installer.list().map_err(io::Error::other)? {
                 println!(
