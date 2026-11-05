@@ -1,7 +1,8 @@
 mod command;
 mod config;
+mod paths;
 
-use std::{io, net::SocketAddr, path::PathBuf};
+use std::{io, net::SocketAddr};
 
 use config::{KickConfig, YoutubeConfig};
 use streams_tools_adapters::{kick::KickAdapter, twitch::TwitchAdapter, youtube::YoutubeAdapter};
@@ -25,7 +26,7 @@ async fn main() -> io::Result<()> {
             return Ok(());
         }
         Ok(command::Command::Plugin(command)) => {
-            if !run_plugin(command).await? {
+            if !run_plugin(command, &paths::Paths::resolve()?).await? {
                 std::process::exit(1);
             }
             return Ok(());
@@ -36,17 +37,11 @@ async fn main() -> io::Result<()> {
             std::process::exit(2);
         }
     }
+    let paths = paths::Paths::resolve()?;
 
-    let config_path = std::env::var_os("STREAMS_CONFIG")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("./config.toml"));
-    let config_path = std::path::absolute(config_path)?;
-    let config = config::load(&config_path)
+    let config = config::load(&paths.config)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    let data_root = std::env::var_os("STREAMS_DATA_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("./data"));
-    let data_root = std::path::absolute(data_root)?;
+    let data_root = paths.data.clone();
 
     let addr: SocketAddr = std::env::var("STREAMS_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:7777".into())
@@ -57,12 +52,8 @@ async fn main() -> io::Result<()> {
                 format!("invalid STREAMS_ADDR: {error}"),
             )
         })?;
-    let plugins_dir = std::env::var_os("STREAMS_PLUGINS_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("./plugins"));
-    let plugins_dir = std::path::absolute(plugins_dir)?;
     let installer = Installer::new(InstallOptions {
-        plugins_root: plugins_dir.clone(),
+        plugins_root: paths.plugins.clone(),
         target: env!("STREAMS_TARGET_TRIPLE").into(),
     })
     .map_err(io::Error::other)?;
@@ -72,27 +63,27 @@ async fn main() -> io::Result<()> {
     {
         print_install_result(result);
     }
-    let alerts_dir = std::env::var_os("STREAMS_ALERTS_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("./alerts"));
-    let alerts_dir = std::path::absolute(alerts_dir)?;
-    let registry =
-        Registry::discover_with_config(&plugins_dir, &config.plugins.config).map_err(|error| {
-            io::Error::new(error.kind(), format!("{}: {error}", plugins_dir.display()))
-        })?;
+    let registry = Registry::discover_with_config(&paths.plugins, &config.plugins.config).map_err(
+        |error| {
+            io::Error::new(
+                error.kind(),
+                format!("{}: {error}", paths.plugins.display()),
+            )
+        },
+    )?;
     for error in registry.errors() {
         eprintln!("[plugin] {error}");
     }
     for warning in registry.warnings() {
         eprintln!("[plugin] {warning}");
     }
-    let alert_registry = AlertRegistry::discover(&alerts_dir).map_err(|error| {
-        io::Error::new(error.kind(), format!("{}: {error}", alerts_dir.display()))
+    let alert_registry = AlertRegistry::discover(&paths.alerts).map_err(|error| {
+        io::Error::new(error.kind(), format!("{}: {error}", paths.alerts.display()))
     })?;
     for error in alert_registry.errors() {
         eprintln!(
             "[alert] {}: campo {}: {}",
-            alerts_dir.join(&error.file).display(),
+            paths.alerts.join(&error.file).display(),
             error.field,
             error.reason
         );
@@ -111,9 +102,7 @@ async fn main() -> io::Result<()> {
             .collect(),
     };
 
-    let styles_root = std::env::var_os("STREAMS_STYLES_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("./styles"));
+    let styles_root = paths.styles;
     let plugins = registry.into_plugins();
     let mut overlays = Vec::new();
     for plugin in &plugins {
@@ -213,12 +202,9 @@ async fn main() -> io::Result<()> {
     result
 }
 
-async fn run_plugin(command: command::PluginCommand) -> io::Result<bool> {
-    let plugins = std::env::var_os("STREAMS_PLUGINS_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("./plugins"));
+async fn run_plugin(command: command::PluginCommand, paths: &paths::Paths) -> io::Result<bool> {
     let installer = Installer::new(InstallOptions {
-        plugins_root: std::path::absolute(plugins)?,
+        plugins_root: paths.plugins.clone(),
         target: env!("STREAMS_TARGET_TRIPLE").into(),
     })
     .map_err(io::Error::other)?;

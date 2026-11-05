@@ -4,7 +4,7 @@
 
 Un plugin es una carpeta con un `plugin.toml`. Puede aportar un worker, un overlay estático o ambos. Se cargan una vez al arrancar `streams-tools`; un manifiesto o worker defectuoso no impide usar los demás. Los overlays quedan en `http://127.0.0.1:7777/p/<name>/`.
 
-El directorio se elige con `STREAMS_PLUGINS_DIR` y por defecto es `./plugins`. Los datos persistentes del worker van a `STREAMS_DATA_DIR` (`./data` por defecto) y los estilos del usuario a `STREAMS_STYLES_DIR` (`./styles`). No hay recarga en caliente: reinicia el binario después de cambiar manifiesto o configuración.
+En desarrollo (`cargo run`) la raíz por defecto es el cwd; en un build release portable es el directorio del ejecutable. `STREAMS_HOME` reemplaza esa raíz. `STREAMS_PLUGINS_DIR`, `STREAMS_DATA_DIR` y `STREAMS_STYLES_DIR` reemplazan rutas individuales; valores relativos se resuelven contra el cwd. No hay recarga en caliente: reinicia el binario después de cambiar configuración.
 
 ## Estructura
 

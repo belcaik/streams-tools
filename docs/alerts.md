@@ -1,5 +1,7 @@
 # Packs de alertas
 
+En desarrollo, `alerts/` se resuelve desde el cwd; en el ZIP release queda junto al ejecutable. Usa `STREAMS_HOME` para mover todo el home o `STREAMS_ALERTS_DIR` para reemplazar sólo esta ruta.
+
 Un pack es una carpeta de alertas reutilizable. Cada alerta combina un manifiesto `alert.toml`, su CSS obligatorio y recursos opcionales. El host carga y valida todo al arrancar; una alerta defectuosa aparece en el diagnóstico sin ocultar las demás.
 
 El directorio predeterminado es `./alerts` y se cambia con `STREAMS_ALERTS_DIR`. Nombres de packs y alertas: `^[a-z0-9][a-z0-9-]*$`.
