@@ -1,5 +1,7 @@
 # Plugins
 
+Para instalar releases sin Git ni Cargo, consulta [Instalación y actualización](plugin-install.md).
+
 ## Qué es un plugin
 
 Un plugin es una carpeta con un `plugin.toml`. Puede aportar un worker, un overlay estático o ambos. Se cargan una vez al arrancar `streams-tools`; un manifiesto o worker defectuoso no impide usar los demás. Los overlays quedan en `http://127.0.0.1:7777/p/<name>/`.
