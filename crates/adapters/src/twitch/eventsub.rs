@@ -190,18 +190,7 @@ async fn open_session(
     let (mut socket, _) = tokio_tungstenite::connect_async(url)
         .await
         .map_err(|error| format!("websocket: {error}"))?;
-    let frame = tokio::time::timeout(Duration::from_secs(10), socket.next())
-        .await
-        .map_err(|_| "timeout esperando session_welcome".to_string())?
-        .ok_or_else(|| "websocket cerrado antes de session_welcome".to_string())?
-        .map_err(|error| error.to_string())?;
-    let Message::Text(text) = frame else {
-        return Err("el primer frame no es session_welcome de texto".into());
-    };
-    let incoming = parse_message(text.as_str())?;
-    if incoming.metadata.message_type != "session_welcome" {
-        return Err("el primer mensaje no es session_welcome".into());
-    }
+    let incoming = await_welcome(&mut socket, WELCOME_TIMEOUT).await?;
     let session = incoming
         .payload
         .get("session")
@@ -225,6 +214,57 @@ async fn open_session(
         socket,
         keepalive: Duration::from_secs(timeout).saturating_add(settings.keepalive_margin),
     })
+}
+
+const WELCOME_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Waits for `session_welcome`, answering control frames on the way.
+/// The timeout covers the whole wait, so a stream of pings cannot extend it.
+async fn await_welcome(socket: &mut Socket, limit: Duration) -> Result<Incoming, String> {
+    let deadline = Instant::now() + limit;
+    loop {
+        let frame = tokio::time::timeout_at(deadline, socket.next())
+            .await
+            .map_err(|_| "timeout esperando session_welcome".to_string())?
+            .ok_or_else(|| "websocket cerrado antes de session_welcome".to_string())?
+            .map_err(|error| format!("websocket antes de session_welcome: {error}"))?;
+        match frame {
+            Message::Text(text) => {
+                let incoming = parse_message(text.as_str())
+                    .map_err(|error| format!("session_welcome inválido: {error}"))?;
+                if incoming.metadata.message_type != "session_welcome" {
+                    return Err(format!(
+                        "se esperaba session_welcome y llegó {}",
+                        incoming.metadata.message_type
+                    ));
+                }
+                return Ok(incoming);
+            }
+            Message::Ping(payload) => {
+                socket
+                    .send(Message::Pong(payload))
+                    .await
+                    .map_err(|error| format!("websocket: no se pudo responder ping: {error}"))?;
+            }
+            Message::Pong(_) | Message::Frame(_) => {}
+            Message::Close(frame) => {
+                return Err(match frame {
+                    Some(frame) => format!(
+                        "websocket cerrado antes de session_welcome: código {} motivo \"{}\"",
+                        u16::from(frame.code),
+                        frame.reason
+                    ),
+                    None => "websocket cerrado antes de session_welcome sin motivo".into(),
+                });
+            }
+            Message::Binary(data) => {
+                return Err(format!(
+                    "frame binario inesperado ({} bytes) antes de session_welcome",
+                    data.len()
+                ));
+            }
+        }
+    }
 }
 
 async fn drive(
@@ -449,5 +489,30 @@ mod tests {
             process_incoming(incoming, &mut RecentIds::new()).unwrap(),
             FrameAction::Reconnect("ws://localhost".into())
         );
+    }
+
+    #[tokio::test]
+    async fn welcome_timeout_is_bounded_while_pings_keep_arriving() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            loop {
+                if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        });
+        let (mut socket, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+        let started = Instant::now();
+        let error = await_welcome(&mut socket, Duration::from_millis(200))
+            .await
+            .unwrap_err();
+        assert_eq!(error, "timeout esperando session_welcome");
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(socket);
+        server.abort();
     }
 }
