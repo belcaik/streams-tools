@@ -70,7 +70,7 @@ jobs:
           printf '%s\n' "${files[@]}" | grep -Fx "$archive/config.example.toml"
           printf '%s\n' "${files[@]}" | grep -Fx "$archive/README.txt"
           ! printf '%s\n' "${files[@]}" | grep -E '(^|/)(plugins|\.git|Cargo\.toml|Cargo\.lock|src)(/|$)'
-          test "$(unzip -ZTs "${archive}.zip" "$archive/streams-tools" | awk 'NR==2 {print substr($1,4,1)}')" = "x"
+          test "$(unzip -ZTs "${archive}.zip" "$archive/streams-tools" | awk '{print substr($1,4,1); exit}')" = "x"
 
       - name: Package Windows ZIP
         if: runner.os == 'Windows'
