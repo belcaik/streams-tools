@@ -10,3 +10,7 @@
 	path = plugins/tts
 	url = https://github.com/belcaik/streams-plugin-tts
 	branch = main
+[submodule "plugins/interactions"]
+	path = plugins/interactions
+	url = https://github.com/belcaik/streams-plugin-interactions
+	branch = main
