@@ -1,3 +1,4 @@
+mod command;
 mod config;
 
 use std::{io, net::SocketAddr, path::PathBuf};
@@ -5,14 +6,35 @@ use std::{io, net::SocketAddr, path::PathBuf};
 use config::{KickConfig, YoutubeConfig};
 use streams_tools_adapters::{kick::KickAdapter, twitch::TwitchAdapter, youtube::YoutubeAdapter};
 use streams_tools_core::Bus;
-use streams_tools_plugins::{AlertRegistry, Registry, Supervisor, SupervisorOptions};
+use streams_tools_plugins::{
+    AlertRegistry, Registry, Supervisor, SupervisorOptions,
+    install::{InstallOptions, Installer},
+};
 use streams_tools_server::{AlertAssets, AlertPackAssets, PluginOverlay};
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    if let Some("--version" | "-V") = std::env::args().nth(1).as_deref() {
-        println!("streams-tools {}", env!("CARGO_PKG_VERSION"));
-        return Ok(());
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    match command::parse(&args) {
+        Ok(command::Command::Version) => {
+            println!("streams-tools {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Ok(command::Command::Help | command::Command::Plugin(command::PluginCommand::Help)) => {
+            println!("{}", command::USAGE);
+            return Ok(());
+        }
+        Ok(command::Command::Plugin(command)) => {
+            if !run_plugin(command).await? {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Ok(command::Command::Server) => {}
+        Err(usage) => {
+            eprintln!("{usage}");
+            std::process::exit(2);
+        }
     }
 
     let config_path = std::env::var_os("STREAMS_CONFIG")
@@ -39,15 +61,30 @@ async fn main() -> io::Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("./plugins"));
     let plugins_dir = std::path::absolute(plugins_dir)?;
+    let installer = Installer::new(InstallOptions {
+        plugins_root: plugins_dir.clone(),
+        target: env!("STREAMS_TARGET_TRIPLE").into(),
+    })
+    .map_err(io::Error::other)?;
+    for result in installer
+        .ensure_missing(config.plugins.install.iter().map(String::as_str))
+        .await
+    {
+        print_install_result(result);
+    }
     let alerts_dir = std::env::var_os("STREAMS_ALERTS_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("./alerts"));
     let alerts_dir = std::path::absolute(alerts_dir)?;
-    let registry = Registry::discover(&plugins_dir).map_err(|error| {
-        io::Error::new(error.kind(), format!("{}: {error}", plugins_dir.display()))
-    })?;
+    let registry =
+        Registry::discover_with_config(&plugins_dir, &config.plugins.config).map_err(|error| {
+            io::Error::new(error.kind(), format!("{}: {error}", plugins_dir.display()))
+        })?;
     for error in registry.errors() {
         eprintln!("[plugin] {error}");
+    }
+    for warning in registry.warnings() {
+        eprintln!("[plugin] {warning}");
     }
     let alert_registry = AlertRegistry::discover(&alerts_dir).map_err(|error| {
         io::Error::new(error.kind(), format!("{}: {error}", alerts_dir.display()))
@@ -84,7 +121,7 @@ async fn main() -> io::Result<()> {
             overlays.push(PluginOverlay {
                 name: plugin.manifest.name.clone(),
                 root,
-                config: plugin.manifest.config_json(),
+                config: plugin.effective_config.clone(),
                 custom_css: styles_root.join(format!("{}.css", plugin.manifest.name)),
             });
         }
@@ -174,4 +211,59 @@ async fn main() -> io::Result<()> {
     }
     supervisor.shutdown().await;
     result
+}
+
+async fn run_plugin(command: command::PluginCommand) -> io::Result<bool> {
+    let plugins = std::env::var_os("STREAMS_PLUGINS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("./plugins"));
+    let installer = Installer::new(InstallOptions {
+        plugins_root: std::path::absolute(plugins)?,
+        target: env!("STREAMS_TARGET_TRIPLE").into(),
+    })
+    .map_err(io::Error::other)?;
+    let success = match command {
+        command::PluginCommand::Add(source) => print_install_result(installer.add(&source).await),
+        command::PluginCommand::Update(name) => installer
+            .update(name.as_deref())
+            .await
+            .into_iter()
+            .all(print_install_result),
+        command::PluginCommand::Remove(name) => print_install_result(installer.remove(&name)),
+        command::PluginCommand::List => {
+            for plugin in installer.list().map_err(io::Error::other)? {
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    plugin.name,
+                    plugin.version.as_deref().unwrap_or("-"),
+                    plugin.state,
+                    plugin.tag.as_deref().unwrap_or("-")
+                );
+            }
+            true
+        }
+        command::PluginCommand::Help => true,
+    };
+    Ok(success)
+}
+
+fn print_install_result(
+    result: Result<
+        streams_tools_plugins::install::InstallOutcome,
+        streams_tools_plugins::install::InstallError,
+    >,
+) -> bool {
+    match result {
+        Ok(outcome) => {
+            if let Some(warning) = outcome.warning {
+                eprintln!("{warning}");
+            }
+            println!("{}: {}", outcome.name, outcome.detail);
+            true
+        }
+        Err(error) => {
+            eprintln!("[plugin] {error}");
+            false
+        }
+    }
 }
